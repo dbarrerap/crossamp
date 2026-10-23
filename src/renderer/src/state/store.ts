@@ -22,7 +22,7 @@ export interface PlayerState {
   volume: number;
   /** true mientras decodifica una pista en loadTrack(). */
   isLoading: boolean;
-  /** Metadatos del archivo en reproducción. null si aún no se parsearon. */
+  /** Metadatos del archivo en reproducción. null si aún no se parsearon. La carátula es una object URL (blob:) cuyo dueño es el PlayerController. */
   metadata: TrackMetadata | null;
 }
 

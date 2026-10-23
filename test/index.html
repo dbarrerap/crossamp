@@ -2,7 +2,10 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'" />
+    <!-- 'blob:' en default-src: el harness verifica la object URL de la
+         caratula con fetch(); sin allow, fetch(blob:) fallaria por CSP y el
+         aserto de revocacion pasaria vacio (falso positivo). -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self'" />
     <title>crossamp engine harness</title>
   </head>
   <body>

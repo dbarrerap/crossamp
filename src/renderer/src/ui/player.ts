@@ -101,7 +101,8 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
         .join(' — ');
     }
 
-    // Caratula: solo cambiamos si cambio el data URL.
+    // Caratula: object URL (blob:). Solo cambiamos si cambio la URL; el
+    // dueño de revocarla es el controller, no la UI.
     const pic = state.currentTrack && !state.isLoading ? meta?.picture : null;
     if (pic) {
       if (cover.src !== pic) cover.src = pic;

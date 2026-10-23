@@ -1,6 +1,7 @@
 import { WebAudioEngine } from '../src/renderer/src/audio/WebAudioEngine';
 import { PlayerController } from '../src/renderer/src/state/PlayerController';
 import { parseID3 } from '../src/renderer/src/metadata/mp3';
+import { trackFromFilename } from '../src/renderer/src/metadata/filename';
 import type { Track } from '../src/renderer/src/state/store';
 
 // Harness de validacion del backend contra MP3 reales.
@@ -194,43 +195,62 @@ async function runController(path: string): Promise<void> {
 }
 
 // Validacion del parser ID3 contra los MP3 reales.
+// Hechos verificados con inspeccion hex: ambos archivos son ID3v2.3, sin
+// frames de texto (TIT2/TPE1/TALB ausentes) y sin ID3v1. Por eso mismo
+// ejercitan bien el fallback A (nombre "Artista - Titulo") y la extraccion
+// de la caratula APIC (PNG).
 async function runMetadata(path: string): Promise<void> {
   const name = path.split(/[\\/]/).pop() ?? path;
   log(`\n===== metadata: ${name} =====`);
 
   const bytes = await window.crossampTest!.readFile(path);
-  const meta = parseID3(bytes);
 
-  // duration lo aporta el engine, nunca el parser.
-  assert(meta.duration === null, 'duration queda null (no la estima el parser)');
+  // Sin filename: los campos sin tag quedan null (no se inventan).
+  const tagsOnly = parseID3(bytes);
+  assert(tagsOnly.title === null, 'sin filename: title queda null (no hay TIT2)');
+  assert(tagsOnly.artist === null, 'sin filename: artist queda null (no hay TPE1)');
+  assert(tagsOnly.picture !== null, 'APIC extraido aunque no haya texto');
+
+  // Con filename (fallback A): huecos rellenos desde "Artista - Titulo",
+  // sin pisar ningun tag valido (aqui no hay tags de texto, asi que todo
+  // lo rellena el nombre).
+  const tags = parseID3(bytes, name);
+  const fromName = trackFromFilename(name);
+  assert(tags.title === fromName.title, `fallback A: title desde nombre (${JSON.stringify(tags.title)})`);
+  assert(tags.artist === fromName.artist, `fallback A: artist desde nombre (${JSON.stringify(tags.artist)})`);
 
   // title/artist/album: string no vacio o null, nunca cadena vacia.
   for (const [k, v] of Object.entries({
-    title: meta.title,
-    artist: meta.artist,
-    album: meta.album
+    title: tags.title,
+    artist: tags.artist,
+    album: tags.album
   })) {
     assert(v === null || (typeof v === 'string' && v.length > 0), `${k}: null o string no vacio`);
   }
 
-  log(`  title=${JSON.stringify(meta.title)} artist=${JSON.stringify(meta.artist)} album=${JSON.stringify(meta.album)}`);
-
-  // Caratula: si existe, debe ser un data URL de imagen valido.
-  if (meta.picture !== null) {
-    assert(/^data:image\/(png|jpeg|webp|gif);base64,/.test(meta.picture), 'picture es un data URL de imagen');
-    assert(meta.picture.length > 1000, `picture tiene contenido real (${meta.picture.length} chars)`);
-    // En estos ficheros concretos la caratula es PNG (verificado).
-    assert(meta.picture.startsWith('data:image/png;base64,'), 'picture es PNG (dato verificado en estos MP3)');
+  // Caratula: bytes crudos + mime. Sin data URL (fallback C: la object URL
+  // la crea el controller, el parser solo expone los bytes).
+  if (tags.picture !== null) {
+    const { mime, data } = tags.picture;
+    assert(/^image\/(png|jpeg|webp|gif)$/.test(mime), `mime de imagen valido (${mime})`);
+    assert(data.length > 1000, `picture con contenido real (${data.length} bytes)`);
+    // En estos ficheros concretos la caratula es PNG (verificado): comprobamos
+    // la firma magica real, no el string del tag, que podria mentir.
+    assert(
+      data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47,
+      'picture es PNG por firma magica (dato verificado en estos MP3)'
+    );
   } else {
     log('  (sin caratula en este archivo)');
   }
 
+  log(`  title=${JSON.stringify(tags.title)} artist=${JSON.stringify(tags.artist)} album=${JSON.stringify(tags.album)}`);
   log('  ===== metadata ok =====');
 }
 
-// Integracion: el controller debe reflejar los metadatos en el store tras
-// loadTrack(). Con estos MP3 reales no hay frames de texto, pero si hay
-// caratula PNG, asi que validamos que metadata llega con el picture.
+// Integracion: el controller debe reflejar los metadatos en el store y ser
+// dueno de la object URL de la caratula (crearla al cargar, revocarla al
+// cambiar de pista y en dispose).
 async function runControllerMetadata(path: string): Promise<void> {
   const name = path.split(/[\\/]/).pop() ?? path;
   log(`\n===== controller+metadata: ${name} =====`);
@@ -246,17 +266,50 @@ async function runControllerMetadata(path: string): Promise<void> {
 
   const state = controller.store.get();
   assert(state.metadata !== null, 'store.metadata poblado tras loadTrack');
-  assert(
-    state.metadata?.duration === null,
-    'metadata.duration sigue null (la duracion exacta va en state.duration)'
-  );
   assert(state.duration > 0, 'state.duration poblado desde el engine');
   assert(
-    state.metadata?.picture?.startsWith('data:image/png;base64,') === true,
-    'metadata.picture con caratula PNG reflejada en el store'
+    state.metadata?.title === trackFromFilename(name).title,
+    'title con fallback A reflejado en el store'
+  );
+  assert(
+    state.metadata?.picture?.startsWith('blob:') === true,
+    'metadata.picture es una object URL blob: (fallback C)'
   );
 
+  // --- Control positivo + revocación (fallback C) ---
+  // Antes de probar que una URL se revoca, hay que demostrar que una URL
+  // viva SÍ se puede leer. Si no, el aserto "fetch falla" sería un falso
+  // positivo (una URL sin revocar daría ese mismo fallo, p.ej. por CSP).
+  const firstUrl = state.metadata!.picture!;
+  const alive = await fetch(firstUrl)
+    .then(() => true)
+    .catch(() => false);
+  assert(alive, 'object URL viva es legible (control positivo)');
+
+  // Cambiar de pista: la URL anterior DEBE quedar revocada (no podemos
+  // "leer" una URL revocada, pero si que fetch sobre ella falle).
+  await controller.loadTrack({ id: 'tm2', title: 'otra', file });
+  const secondUrl = controller.store.get().metadata?.picture ?? null;
+  assert(secondUrl !== null && secondUrl !== firstUrl, 'URL nueva tras recargar (no se reutiliza la vieja)');
+  const oldStillWorks = await fetch(firstUrl)
+    .then(() => true)
+    .catch(() => false);
+  assert(!oldStillWorks, 'la object URL anterior queda revocada al cambiar de pista');
+
+  // dispose(): la URL vigente tambien se revoca. Control positivo: la URL
+  // actual debe ser legible ANTES del dispose.
+  const currentUrl = secondUrl!;
+  const currentAliveBeforeDispose = await fetch(currentUrl)
+    .then(() => true)
+    .catch(() => false);
+  assert(currentAliveBeforeDispose, 'URL vigente legible antes de dispose (control positivo)');
+
   controller.dispose();
+  const currentStillWorks = await fetch(currentUrl)
+    .then(() => true)
+    .catch(() => false);
+  assert(!currentStillWorks, 'dispose() revoca la object URL vigente');
+
   log('  ===== controller+metadata ok =====');
 }
 

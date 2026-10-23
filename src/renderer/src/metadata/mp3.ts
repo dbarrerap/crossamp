@@ -1,4 +1,5 @@
-import type { TrackMetadata } from './types';
+import { trackFromFilename } from './filename';
+import type { EmbeddedPicture, ParsedTags } from './types';
 
 /**
  * Parser de metadatos MP3 (ID3v2.3 / ID3v2.4 + fallback ID3v1).
@@ -14,9 +15,12 @@ import type { TrackMetadata } from './types';
  *  - APIC: encoding + MIME (null-terminated) + picture type + descripcion
  *    (null-terminated, terminador de 2 bytes si encoding UTF-16) + imagen.
  *
- * duration NO se rellena aqui: el parser no estima duracion (VBR es
- * engañoso). El AudioEngine la aporta exacta tras decodificar, y es el
- * controller quien la mezcla en el store.
+ * Fallback de nombre (idea de cliamp): si se pasa `filename`, los huecos
+ * que los tags dejan vacíos se rellenan desde "Artista - Título" del
+ * nombre. Un tag válido NUNCA lo pisa el fallback.
+ *
+ * duration NO existe aqui: el parser no estima duracion (VBR es engañoso).
+ * El AudioEngine la aporta exacta tras decodificar en `PlayerState.duration`.
  */
 
 const MAX_TAG_SIZE = 20 * 1024 * 1024; // red de seguridad ante tags corruptos
@@ -73,25 +77,8 @@ function decodeText(encoding: number, bytes: Uint8Array): string {
   return value.replace(/\0.*$/s, '').trim();
 }
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  // En bloques para no estallar el stack con String.fromCharCode en tags
-  // grandes (una carátula puede pesar >1 MB).
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-interface ParsedPicture {
-  mime: string;
-  data: Uint8Array;
-}
-
 /** Parsea el cuerpo de un frame APIC. */
-function parseAPIC(body: Uint8Array): ParsedPicture | null {
+function parseAPIC(body: Uint8Array): EmbeddedPicture | null {
   if (body.length < 5) return null;
 
   const encoding = body[0];
@@ -121,19 +108,24 @@ function parseAPIC(body: Uint8Array): ParsedPicture | null {
   const data = body.subarray(i);
   if (data.length === 0) return null;
 
-  return { mime, data };
+  // Copia (slice, no subarray): un subarray mantiene vivo TODO el
+  // ArrayBuffer del MP3 (potencialmente MBs) mientras viva la carátula.
+  return { mime, data: data.slice() };
 }
 
 /**
  * Parsea metadatos MP3 de un ArrayBuffer.
  * Nunca lanza: ante cualquier problema devuelve campos nulos.
+ *
+ * `filename` es opcional: si se pasa, los campos que los tags dejaron
+ * vacíos se rellenan con el patrón "Artista - Título" del nombre (fallback
+ * estilo cliamp). Un tag con valor no se pisa nunca.
  */
-export function parseID3(buffer: ArrayBuffer): TrackMetadata {
-  const result: TrackMetadata = {
+export function parseID3(buffer: ArrayBuffer, filename?: string): ParsedTags {
+  const result: ParsedTags = {
     title: null,
     artist: null,
     album: null,
-    duration: null,
     picture: null
   };
 
@@ -146,11 +138,18 @@ export function parseID3(buffer: ArrayBuffer): TrackMetadata {
     // Metadatos son best-effort: un tag corrupto no debe romper la carga.
   }
 
+  // Rellenar SOLO huecos desde el nombre del archivo.
+  if (filename) {
+    const fromName = trackFromFilename(filename);
+    if (!result.title) result.title = fromName.title;
+    if (!result.artist) result.artist = fromName.artist;
+  }
+
   return result;
 }
 
 /** Intenta ID3v2. Devuelve true si encontró y procesó un tag v2. */
-function parseID3v2(view: Uint8Array, out: TrackMetadata): boolean {
+function parseID3v2(view: Uint8Array, out: ParsedTags): boolean {
   if (view.length < 10) return false;
   if (view[0] !== 0x49 || view[1] !== 0x44 || view[2] !== 0x33) return false; // "ID3"
 
@@ -194,10 +193,8 @@ function parseID3v2(view: Uint8Array, out: TrackMetadata): boolean {
     } else if (id === 'TALB') {
       out.album = decodeText(body[0], body.subarray(1)) || out.album;
     } else if (id === 'APIC' && out.picture === null) {
-      const pic = parseAPIC(body);
-      if (pic) {
-        out.picture = `data:${pic.mime};base64,${toBase64(pic.data)}`;
-      }
+      // Primera carátula que encontremos gana.
+      out.picture = parseAPIC(body);
     }
 
     offset += 10 + size;
@@ -207,7 +204,7 @@ function parseID3v2(view: Uint8Array, out: TrackMetadata): boolean {
 }
 
 /** Fallback ID3v1: ultimos 128 bytes, magic "TAG". */
-function parseID3v1(view: Uint8Array, out: TrackMetadata): void {
+function parseID3v1(view: Uint8Array, out: ParsedTags): void {
   if (view.length < 128) return;
 
   const tail = view.subarray(view.length - 128);
