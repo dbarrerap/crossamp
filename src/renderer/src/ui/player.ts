@@ -17,10 +17,20 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
 
   const store = controller.store;
 
-  // --- Titulo de pista ---
+  // --- Caratula ---
+  const cover = document.createElement('img');
+  cover.className = 'player-cover';
+  cover.alt = '';
+  cover.hidden = true;
+
+  // --- Titulo / artista / album ---
   const title = document.createElement('div');
   title.className = 'player-title';
   title.textContent = 'Sin pista';
+
+  const subtitle = document.createElement('div');
+  subtitle.className = 'player-subtitle';
+  subtitle.textContent = '';
 
   // --- Tiempo posicion / duracion ---
   const time = document.createElement('div');
@@ -70,15 +80,37 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
     controller.setVolume(Number(volume.value) / 100);
   });
 
-  el.append(title, time, seek, controls, volume);
+  el.append(cover, title, subtitle, time, seek, controls, volume);
 
   // --- Render desde el store (estado discreto) ---
   store.subscribe((state) => {
-    title.textContent = state.currentTrack
-      ? state.isLoading
-        ? `${state.currentTrack.title} (cargando…)`
-        : state.currentTrack.title
-      : 'Sin pista';
+    const meta = state.metadata;
+
+    // El titulo prioriza el tag; si no hay, cae al nombre del archivo.
+    if (!state.currentTrack) {
+      title.textContent = 'Sin pista';
+      subtitle.textContent = '';
+    } else if (state.isLoading) {
+      title.textContent = `${state.currentTrack.title} (cargando…)`;
+      subtitle.textContent = '';
+    } else {
+      title.textContent = meta?.title || state.currentTrack.title;
+      // Subtitulo: artista — album, omitiendo lo que falte.
+      subtitle.textContent = [meta?.artist, meta?.album]
+        .filter((v): v is string => Boolean(v))
+        .join(' — ');
+    }
+
+    // Caratula: solo cambiamos si cambio el data URL.
+    const pic = state.currentTrack && !state.isLoading ? meta?.picture : null;
+    if (pic) {
+      if (cover.src !== pic) cover.src = pic;
+      cover.hidden = false;
+    } else {
+      cover.removeAttribute('src');
+      cover.hidden = true;
+    }
+
     playBtn.textContent = state.isPlaying ? 'Pause' : 'Play';
     playBtn.disabled = !state.currentTrack || state.isLoading;
     seek.disabled = !state.currentTrack || state.duration === 0;

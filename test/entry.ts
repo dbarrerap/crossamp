@@ -1,5 +1,6 @@
 import { WebAudioEngine } from '../src/renderer/src/audio/WebAudioEngine';
 import { PlayerController } from '../src/renderer/src/state/PlayerController';
+import { parseID3 } from '../src/renderer/src/metadata/mp3';
 import type { Track } from '../src/renderer/src/state/store';
 
 // Harness de validacion del backend contra MP3 reales.
@@ -192,6 +193,73 @@ async function runController(path: string): Promise<void> {
   log('  ===== controller ok =====');
 }
 
+// Validacion del parser ID3 contra los MP3 reales.
+async function runMetadata(path: string): Promise<void> {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  log(`\n===== metadata: ${name} =====`);
+
+  const bytes = await window.crossampTest!.readFile(path);
+  const meta = parseID3(bytes);
+
+  // duration lo aporta el engine, nunca el parser.
+  assert(meta.duration === null, 'duration queda null (no la estima el parser)');
+
+  // title/artist/album: string no vacio o null, nunca cadena vacia.
+  for (const [k, v] of Object.entries({
+    title: meta.title,
+    artist: meta.artist,
+    album: meta.album
+  })) {
+    assert(v === null || (typeof v === 'string' && v.length > 0), `${k}: null o string no vacio`);
+  }
+
+  log(`  title=${JSON.stringify(meta.title)} artist=${JSON.stringify(meta.artist)} album=${JSON.stringify(meta.album)}`);
+
+  // Caratula: si existe, debe ser un data URL de imagen valido.
+  if (meta.picture !== null) {
+    assert(/^data:image\/(png|jpeg|webp|gif);base64,/.test(meta.picture), 'picture es un data URL de imagen');
+    assert(meta.picture.length > 1000, `picture tiene contenido real (${meta.picture.length} chars)`);
+    // En estos ficheros concretos la caratula es PNG (verificado).
+    assert(meta.picture.startsWith('data:image/png;base64,'), 'picture es PNG (dato verificado en estos MP3)');
+  } else {
+    log('  (sin caratula en este archivo)');
+  }
+
+  log('  ===== metadata ok =====');
+}
+
+// Integracion: el controller debe reflejar los metadatos en el store tras
+// loadTrack(). Con estos MP3 reales no hay frames de texto, pero si hay
+// caratula PNG, asi que validamos que metadata llega con el picture.
+async function runControllerMetadata(path: string): Promise<void> {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  log(`\n===== controller+metadata: ${name} =====`);
+
+  const engine = new WebAudioEngine();
+  const controller = new PlayerController(engine);
+
+  const bytes = await window.crossampTest!.readFile(path);
+  const file = new File([bytes], name);
+  const track: Track = { id: 'tm', title: name, file };
+
+  await controller.loadTrack(track);
+
+  const state = controller.store.get();
+  assert(state.metadata !== null, 'store.metadata poblado tras loadTrack');
+  assert(
+    state.metadata?.duration === null,
+    'metadata.duration sigue null (la duracion exacta va en state.duration)'
+  );
+  assert(state.duration > 0, 'state.duration poblado desde el engine');
+  assert(
+    state.metadata?.picture?.startsWith('data:image/png;base64,') === true,
+    'metadata.picture con caratula PNG reflejada en el store'
+  );
+
+  controller.dispose();
+  log('  ===== controller+metadata ok =====');
+}
+
 async function main(): Promise<void> {
   if (!window.crossampTest) {
     log('FATAL: API de test no expuesta por el preload');
@@ -218,6 +286,26 @@ async function main(): Promise<void> {
     } catch (err) {
       failures++;
       log(`[FAIL] excepcion en runController: ${String(err)}`);
+    }
+  }
+
+  // Parser ID3: contra todos los archivos.
+  for (const p of paths) {
+    try {
+      await runMetadata(p);
+    } catch (err) {
+      failures++;
+      log(`[FAIL] excepcion en runMetadata: ${String(err)}`);
+    }
+  }
+
+  // Integracion: el controller refleja los metadatos en el store.
+  if (paths.length > 0) {
+    try {
+      await runControllerMetadata(paths[0]);
+    } catch (err) {
+      failures++;
+      log(`[FAIL] excepcion en runControllerMetadata: ${String(err)}`);
     }
   }
 

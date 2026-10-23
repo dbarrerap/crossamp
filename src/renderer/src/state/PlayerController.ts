@@ -1,4 +1,5 @@
 import type { AudioEngine } from '../audio/AudioEngine';
+import { parseID3 } from '../metadata/mp3';
 import { Store, initialPlayerState, type PlayerState, type Track } from './store';
 
 /**
@@ -28,12 +29,32 @@ export class PlayerController {
     });
   }
 
-  /** Carga y decodifica una pista. Reemplaza la actual. */
+  /**
+   * Carga y decodifica una pista. Reemplaza la actual.
+   *
+   * Lee el File UNA sola vez a ArrayBuffer: de esos bytes se parsean los
+   * metadatos y se los pasamos al engine. Así no leemos un MP3 grande dos
+   * veces (una para tags, otra para decodificar). El engine clona el buffer
+   * antes de decodificar (decodeAudioData lo desengancha), así que nuestro
+   * ArrayBuffer sigue siendo válido tras load().
+   */
   async loadTrack(track: Track): Promise<void> {
-    this.store.set({ isLoading: true, currentTrack: track, position: 0, duration: 0 });
+    this.store.set({
+      isLoading: true,
+      currentTrack: track,
+      metadata: null,
+      position: 0,
+      duration: 0
+    });
 
     try {
-      await this.engine.load(track.file);
+      const bytes = await track.file.arrayBuffer();
+
+      // Best-effort: un tag corrupto no debe impedir la reproducción.
+      const metadata = parseID3(bytes);
+      this.store.set({ metadata });
+
+      await this.engine.load(bytes);
       this.store.set({
         isLoading: false,
         duration: this.engine.getDuration(),

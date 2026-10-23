@@ -10,6 +10,8 @@
  * lo lea en su propio bucle requestAnimationFrame. Emitir position a 60Hz
  * por un pub/sub sería un desperdicio.
  */
+import type { TrackMetadata } from '../metadata/types';
+
 export interface PlayerState {
   isPlaying: boolean;
   currentTrack: Track | null;
@@ -20,10 +22,13 @@ export interface PlayerState {
   volume: number;
   /** true mientras decodifica una pista en loadTrack(). */
   isLoading: boolean;
+  /** Metadatos del archivo en reproducción. null si aún no se parsearon. */
+  metadata: TrackMetadata | null;
 }
 
 export interface Track {
   id: string;
+  /** Nombre del archivo. Sirve de fallback si el tag no trae título. */
   title: string;
   file: File;
 }
@@ -34,7 +39,8 @@ export const initialPlayerState: PlayerState = {
   position: 0,
   duration: 0,
   volume: 1,
-  isLoading: false
+  isLoading: false,
+  metadata: null
 };
 
 type Listener<S> = (state: S) => void;

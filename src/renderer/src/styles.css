@@ -17,3 +17,55 @@ body {
   padding: 12px;
   font-size: 13px;
 }
+
+.player-cover {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  background: #2a2a2a;
+}
+
+.player-cover[hidden] {
+  display: none;
+}
+
+.player-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-subtitle {
+  color: #9a9a9a;
+  font-size: 12px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-subtitle:empty {
+  display: none;
+}
+
+.player-time {
+  font-variant-numeric: tabular-nums;
+  color: #b0b0b0;
+  margin-bottom: 4px;
+}
+
+.player-seek,
+.player-volume {
+  width: 100%;
+}
+
+.player-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
