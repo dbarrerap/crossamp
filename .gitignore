@@ -1,0 +1,19 @@
+# Dependencias
+node_modules/
+
+# Build
+dist/
+out/
+release/
+*.tsbuildinfo
+
+# Electron
+*.asar
+
+# Entorno
+.env
+.env.local
+
+# SO
+.DS_Store
+Thumbs.db
