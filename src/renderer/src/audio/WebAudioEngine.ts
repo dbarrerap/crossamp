@@ -47,10 +47,15 @@ export class WebAudioEngine implements AudioEngine {
     const bytes =
       source instanceof File ? await source.arrayBuffer() : source.slice(0);
 
-    const buffer = await this.ctx.decodeAudioData(bytes);
-
+    // Detenemos la pista actual ANTES de decodificar: cargar un archivo
+    // nuevo sustituye lo que suena ahora, y decodificar puede tardar. Así
+    // el cambio es inmediato y, si la decodificación falla, no queda
+    // audio "huérfano" sonando sin control.
     this.stopSource();
     this.playing = false;
+
+    const buffer = await this.ctx.decodeAudioData(bytes);
+
     this.buffer = buffer;
     this.offset = 0;
   }
