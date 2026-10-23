@@ -142,7 +142,8 @@ async function runController(path: string): Promise<void> {
   const afterLoad = controller.store.get();
   assert(afterLoad.isLoading === false, 'isLoading false tras cargar');
   assert(afterLoad.duration > 0, 'duration reflejado en el store');
-  assert(afterLoad.isPlaying === false, 'isPlaying false tras cargar');
+  // Cargar un archivo implica escucharlo: loadTrack auto-play (Winamp).
+  assert(afterLoad.isPlaying === true, 'isPlaying true tras cargar (auto-play)');
   assert(emitted >= 2, 'el store emitió durante loadTrack');
 
   // play -> isPlaying true
@@ -290,6 +291,9 @@ async function runControllerMetadata(path: string): Promise<void> {
   // "leer" una URL revocada, pero si que fetch sobre ella falle).
   await controller.loadTrack({ id: 'tm2', title: 'otra', file });
   const secondUrl = controller.store.get().metadata?.picture ?? null;
+  // Escenario del bug original: cargar encima de una pista EN SONIDO debe
+  // arrancar la nueva sola (sin exigir pause+play manual).
+  assert(controller.store.get().isPlaying === true, 'auto-play al cargar encima de otra pista');
   assert(secondUrl !== null && secondUrl !== firstUrl, 'URL nueva tras recargar (no se reutiliza la vieja)');
   const oldStillWorks = await fetch(firstUrl)
     .then(() => true)
