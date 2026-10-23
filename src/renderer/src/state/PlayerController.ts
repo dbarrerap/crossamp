@@ -36,7 +36,7 @@ export class PlayerController {
   }
 
   /**
-   * Carga y decodifica una pista. Reemplaza la actual.
+   * Carga, decodifica y reproduce una pista. Reemplaza la actual.
    *
    * Lee el File UNA sola vez a ArrayBuffer: de esos bytes se parsean los
    * metadatos y se los pasamos al engine. Así no leemos un MP3 grande dos
@@ -74,9 +74,24 @@ export class PlayerController {
         duration: this.engine.getDuration(),
         position: 0
       });
+
+      // Reproducir siempre: cargar un archivo es una apertura explícita y
+      // eso implica intención de escucharlo (estilo Winamp). Antes de este
+      // arreglo, load() paraba el engine pero el store seguía diciendo
+      // isPlaying: true; el primer clic en Play se "comía" en un pause()
+      // sin efecto. play() re-sincroniza el store con el engine.
+      this.play();
     } catch (err) {
       const failedPicture = this.store.get().metadata?.picture ?? null;
-      this.store.set({ isLoading: false, currentTrack: null, metadata: null });
+      // Nunca dejamos audio huérfano: si el fallo dejó sonando la pista
+      // anterior, la paramos y reflejamos isPlaying en el store.
+      this.engine.pause();
+      this.store.set({
+        isLoading: false,
+        isPlaying: false,
+        currentTrack: null,
+        metadata: null
+      });
       if (failedPicture?.startsWith('blob:')) URL.revokeObjectURL(failedPicture);
       throw err;
     }
