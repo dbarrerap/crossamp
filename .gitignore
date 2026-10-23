@@ -10,6 +10,9 @@ release/
 # Electron
 *.asar
 
+# Salida del harness de test
+test/out/
+
 # Entorno
 .env
 .env.local
