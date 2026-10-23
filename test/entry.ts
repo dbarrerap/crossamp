@@ -1,4 +1,6 @@
 import { WebAudioEngine } from '../src/renderer/src/audio/WebAudioEngine';
+import { PlayerController } from '../src/renderer/src/state/PlayerController';
+import type { Track } from '../src/renderer/src/state/store';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -108,6 +110,88 @@ async function runOne(path: string): Promise<void> {
   log(`  ===== ${failures === 0 ? 'ok' : 'con fallos'} =====`);
 }
 
+// Prueba del cableado AudioEngine <-> Store <-> Controller.
+async function runController(path: string): Promise<void> {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  log(`\n===== controller: ${name} =====`);
+
+  const engine = new WebAudioEngine();
+  const controller = new PlayerController(engine);
+
+  // Track con un File construido desde los bytes leidos.
+  const bytes = await window.crossampTest!.readFile(path);
+  const file = new File([bytes], name);
+  const track: Track = { id: 't1', title: name, file };
+
+  // El store debe emitir al suscribirse.
+  let emitted = 0;
+  const unsubscribe = controller.store.subscribe(() => {
+    emitted++;
+  });
+  assert(emitted === 0, 'sin emision antes de tocar nada');
+
+  // loadTrack: isLoading true -> duration conocida, isLoading false.
+  const loadPromise = controller.loadTrack(track);
+  // Tras el primer await interno isLoading ya deberia estar reflejado.
+  const loadingState = controller.store.get();
+  assert(loadingState.currentTrack?.id === 't1', 'currentTrack fijado en loadTrack');
+  await loadPromise;
+
+  const afterLoad = controller.store.get();
+  assert(afterLoad.isLoading === false, 'isLoading false tras cargar');
+  assert(afterLoad.duration > 0, 'duration reflejado en el store');
+  assert(afterLoad.isPlaying === false, 'isPlaying false tras cargar');
+  assert(emitted >= 2, 'el store emitió durante loadTrack');
+
+  // play -> isPlaying true
+  controller.play();
+  assert(controller.store.get().isPlaying === true, 'isPlaying true tras play');
+
+  // La posicion en vivo avanza via getPosition() (no por el store).
+  await sleep(400);
+  const live = controller.getPosition();
+  assert(live > 0.1, `getPosition() avanza (${live.toFixed(2)}s)`);
+
+  // pause -> isPlaying false y position reflejado
+  controller.pause();
+  const afterPause = controller.store.get();
+  assert(afterPause.isPlaying === false, 'isPlaying false tras pause');
+  assert(afterPause.position > 0, 'position reflejado en el store tras pause');
+
+  // toggle invierte
+  controller.toggle();
+  assert(controller.store.get().isPlaying === true, 'toggle() reanuda');
+  controller.toggle();
+  assert(controller.store.get().isPlaying === false, 'toggle() pausa');
+
+  // seek refleja position en el store
+  controller.seek(2);
+  assert(
+    Math.abs(controller.store.get().position - 2) < 0.01,
+    'seek(2) refleja position=2 en el store'
+  );
+
+  // setVolume refleja volume
+  controller.setVolume(0.3);
+  assert(
+    Math.abs(controller.store.get().volume - 0.3) < 0.001,
+    'setVolume refleja volume en el store'
+  );
+
+  // Fin natural: el store pasa a isPlaying false.
+  controller.seek(afterLoad.duration - 0.3);
+  controller.play();
+  await sleep(1200);
+  assert(
+    controller.store.get().isPlaying === false,
+    'onEnded refleja isPlaying=false en el store'
+  );
+
+  unsubscribe();
+  controller.dispose();
+  log('  ===== controller ok =====');
+}
+
 async function main(): Promise<void> {
   if (!window.crossampTest) {
     log('FATAL: API de test no expuesta por el preload');
@@ -124,6 +208,16 @@ async function main(): Promise<void> {
     } catch (err) {
       failures++;
       log(`[FAIL] excepcion en runOne: ${String(err)}`);
+    }
+  }
+
+  // Cableado controller/store: basta con un archivo.
+  if (paths.length > 0) {
+    try {
+      await runController(paths[0]);
+    } catch (err) {
+      failures++;
+      log(`[FAIL] excepcion en runController: ${String(err)}`);
     }
   }
 

@@ -19,6 +19,8 @@ export interface AudioEngine {
   getTime(): number;
   /** Duración total en segundos (0 si aún no está cargada). */
   getDuration(): number;
+  /** true si está sonando actualmente. */
+  isPlaying(): boolean;
   setVolume(volume: number): void;
   /** Se dispara al terminar la pista naturalmente. */
   onEnded(callback: () => void): void;
