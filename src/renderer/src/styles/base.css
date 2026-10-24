@@ -1,0 +1,20 @@
+/**
+ * Reset mínimo y shell de la aplicación.
+ *
+ * El shell (.app) envuelve los paneles; en el paso 3.2 pasa a grid para
+ * maquetar las tarjetas Bento.
+ */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+.app {
+  display: block;
+}

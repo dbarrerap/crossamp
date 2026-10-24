@@ -1,3 +1,4 @@
+import type { PlayerState } from '../state/store';
 import type { PlayerController } from '../state/PlayerController';
 import { seekKeyTarget } from './seek';
 
@@ -90,7 +91,7 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
   el.append(cover, title, subtitle, time, seek, controls, volume);
 
   // --- Render desde el store (estado discreto) ---
-  store.subscribe((state) => {
+  const render = (state: PlayerState): void => {
     const meta = state.metadata;
 
     // El titulo prioriza el tag; si no hay, cae al nombre del archivo.
@@ -128,7 +129,10 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
       (!state.currentTrack && !state.canStartFromPlaylist);
     seek.max = String(state.duration > 0 ? state.duration : 1);
     seek.disabled = !state.currentTrack || state.duration === 0;
-  });
+  };
+  store.subscribe(render);
+  // Primer pintado: el Store no emite al suscribirse.
+  render(store.get());
 
   // --- Seek ---
   const fmt = (s: number): string => {

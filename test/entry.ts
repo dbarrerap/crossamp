@@ -15,6 +15,9 @@ import { PlaylistController } from '../src/renderer/src/playlist/PlaylistControl
 import { resolvePlaylistFile } from '../src/renderer/src/playlist/materialize';
 import { connectPlaylistPlayback } from '../src/renderer/src/playlist/connect';
 import { seekKeyTarget } from '../src/renderer/src/ui/seek';
+import type { AudioEngine } from '../src/renderer/src/audio/AudioEngine';
+import { createPlayerUI } from '../src/renderer/src/ui/player';
+import { createPlaylistUI } from '../src/renderer/src/ui/playlist';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -343,6 +346,95 @@ async function runControllerMetadata(path: string): Promise<void> {
   assert(!currentStillWorks, 'dispose() revoca la object URL vigente');
 
   log('  ===== controller+metadata ok =====');
+}
+
+/**
+ * Smoke tests de UI (Fase 3): construyen los paneles reales con un engine
+ * falso y verifican estructura + interacciones básicas. No reproducen audio;
+ * protegen el rediseño Bento de romper selectores o handlers.
+ */
+function runUiSmoke(): void {
+  log('\n===== ui: smoke =====');
+
+  const fakeEngine: AudioEngine = {
+    load: async () => {},
+    play: () => {},
+    pause: () => {},
+    seek: () => {},
+    getTime: () => 0,
+    getDuration: () => 0,
+    isPlaying: () => false,
+    setVolume: () => {},
+    onEnded: () => {},
+    dispose: () => {}
+  };
+
+  // --- Player ---
+  const player = new PlayerController(fakeEngine);
+  const ui = createPlayerUI(player);
+
+  assert(ui.classList.contains('player'), 'UI player: contenedor .player');
+  assert(ui.querySelector('.player-cover') !== null, 'UI player: carátula');
+  assert(
+    ui.querySelector('.player-title')?.textContent === 'Sin pista',
+    'UI player: título inicial'
+  );
+  assert(ui.querySelector('.player-time') !== null, 'UI player: tiempo');
+
+  const seek = ui.querySelector('.player-seek') as HTMLInputElement | null;
+  assert(
+    seek !== null && seek.step === 'any' && seek.getAttribute('aria-label') === 'Posición',
+    'UI player: seek en segundos y accesible'
+  );
+
+  const playBtn = ui.querySelector('.player-controls button') as HTMLButtonElement | null;
+  assert(playBtn?.disabled === true, 'UI player: Play deshabilitado sin pista');
+  player.store.set({ canStartFromPlaylist: true });
+  assert(playBtn?.disabled === false, 'UI player: Play habilitado con lista');
+  player.dispose();
+
+  // --- Playlist ---
+  const pl = new PlaylistController();
+  let playedId: string | null = null;
+  const plUi = createPlaylistUI(pl, {
+    playItem: (id) => {
+      playedId = id;
+    }
+  });
+
+  assert(plUi.querySelector('.playlist-list')?.tagName === 'OL', 'UI playlist: lista es <ol>');
+  assert(
+    plUi.querySelector('.playlist-count')?.textContent === '0',
+    'UI playlist: contador en 0'
+  );
+  assert(
+    plUi.querySelector('.playlist-empty')?.hasAttribute('hidden') === false,
+    'UI playlist: mensaje de vacío visible'
+  );
+  assert(
+    plUi.querySelector('.playlist-menu')?.hasAttribute('hidden') === true,
+    'UI playlist: menú cerrado al inicio'
+  );
+
+  pl.addFiles([new File([], 'Uno.mp3'), new File([], 'Dos.mp3')]);
+  assert(
+    plUi.querySelector('.playlist-count')?.textContent === '2',
+    'UI playlist: contador se actualiza'
+  );
+
+  const rows = plUi.querySelectorAll('.playlist-item');
+  assert(rows.length === 2 && rows[0].textContent === 'Uno', 'UI playlist: filas renderizadas');
+
+  rows[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  assert(
+    pl.store.get().selectedId === pl.store.get().items[0].id,
+    'UI playlist: clic selecciona'
+  );
+
+  rows[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  assert(playedId === pl.store.get().items[0].id, 'UI playlist: doble clic reproduce');
+
+  log('  ===== ui smoke ok =====');
 }
 
 // Reglas de seek con teclado (puras): flechas, Shift, Home/End y recortes.
@@ -825,6 +917,14 @@ async function main(): Promise<void> {
   } catch (err) {
     failures++;
     log(`[FAIL] excepcion en runSeekKeys: ${String(err)}`);
+  }
+
+  // Smoke de UI (Fase 3): estructura de paneles y handlers básicos.
+  try {
+    runUiSmoke();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runUiSmoke: ${String(err)}`);
   }
 
   // Ajustes 2 y 3: transporte playlist ⇄ player (clear, playingId,

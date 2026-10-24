@@ -1,0 +1,62 @@
+/**
+ * Panel del reproductor.
+ *
+ * Paso 3.1: misma disposición y colores que antes, solo migrados a tokens.
+ * El rediseño Bento llega en el paso 3.2.
+ */
+.player {
+  padding: 12px;
+  font-size: 13px;
+}
+
+.player-cover {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  background: var(--panel);
+}
+
+.player-cover[hidden] {
+  display: none;
+}
+
+.player-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-subtitle {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-subtitle:empty {
+  display: none;
+}
+
+.player-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-soft);
+  margin-bottom: 4px;
+}
+
+.player-seek,
+.player-volume {
+  width: 100%;
+}
+
+.player-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}

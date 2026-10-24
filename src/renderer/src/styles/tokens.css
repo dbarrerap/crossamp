@@ -1,0 +1,48 @@
+/**
+ * Tokens de diseño (Fase 3 — piel Bento).
+ *
+ * Toda la piel se define aquí: las hojas de componente solo consumen
+ * variables. Cambiar el acento o un radio no requiere tocar selectores.
+ *
+ * Paleta aprobada: grafito + ámbar. El acento se usa en seek, estados
+ * activos y "sonando" (los estados de lista se ajustan en 3.3).
+ */
+:root {
+  color-scheme: dark;
+
+  /* Superficies */
+  --bg: #1a1a1a;
+  --panel: #2a2a2a;
+  --panel-raised: #262626;
+  --well: #111;
+  --border: #3a3a3a;
+  --border-strong: #4a4a4a;
+
+  /* Texto */
+  --text: #e0e0e0;
+  --text-soft: #b0b0b0;
+  --text-dim: #9a9a9a;
+  --text-faint: #666;
+
+  /* Acento Bento (ámbar) */
+  --accent: #e0a030;
+  --accent-strong: #f0b040;
+  --accent-contrast: #1a1a1a;
+
+  /* Estados de lista (provisionales hasta el paso 3.3) */
+  --selected: #3a5a8c;
+  --playing: #1f4d2e;
+
+  /* Geometría */
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Sombras */
+  --shadow-menu: 0 6px 16px rgba(0, 0, 0, 0.5);
+  --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* Tipografía */
+  --font-ui: system-ui, sans-serif;
+}

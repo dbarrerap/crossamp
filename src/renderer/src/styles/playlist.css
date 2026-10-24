@@ -1,75 +1,9 @@
-:root {
-  color-scheme: dark;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: #1a1a1a;
-  color: #e0e0e0;
-  font-family: system-ui, sans-serif;
-}
-
-.player {
-  padding: 12px;
-  font-size: 13px;
-}
-
-.player-cover {
-  display: block;
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
-  border-radius: 4px;
-  margin-bottom: 8px;
-  background: #2a2a2a;
-}
-
-.player-cover[hidden] {
-  display: none;
-}
-
-.player-title {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.player-subtitle {
-  color: #9a9a9a;
-  font-size: 12px;
-  margin-bottom: 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.player-subtitle:empty {
-  display: none;
-}
-
-.player-time {
-  font-variant-numeric: tabular-nums;
-  color: #b0b0b0;
-  margin-bottom: 4px;
-}
-
-.player-seek,
-.player-volume {
-  width: 100%;
-}
-
-.player-controls {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin: 8px 0;
-}
-
+/**
+ * Panel de playlist y diálogo de info.
+ *
+ * Paso 3.1: mismas reglas que antes, migradas a tokens. El rediseño Bento
+ * llega en el paso 3.3.
+ */
 .playlist {
   position: relative;
   padding: 0 12px 12px;
@@ -94,7 +28,7 @@ body {
 }
 
 .playlist-count {
-  color: #9a9a9a;
+  color: var(--text-dim);
   font-size: 12px;
 }
 
@@ -104,15 +38,15 @@ body {
   padding: 0;
   line-height: 1;
   font-size: 14px;
-  color: #e0e0e0;
-  background: #2a2a2a;
-  border: 1px solid #3a3a3a;
-  border-radius: 4px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   cursor: pointer;
 }
 
 .playlist-menu-btn:hover {
-  background: #333;
+  background: var(--panel-raised);
 }
 
 /* Desplegable anclado bajo la cabecera, por encima de la lista. */
@@ -125,10 +59,10 @@ body {
   flex-direction: column;
   min-width: 176px;
   padding: 4px;
-  background: #262626;
-  border: 1px solid #3a3a3a;
-  border-radius: 6px;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
 }
 
 .playlist-menu[hidden] {
@@ -143,22 +77,22 @@ body {
   font: inherit;
   text-align: left;
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   cursor: pointer;
 }
 
 .playlist-menu-item:hover:not(:disabled) {
-  background: #333;
+  background: var(--panel);
 }
 
 .playlist-menu-item:disabled {
-  color: #666;
+  color: var(--text-faint);
   cursor: default;
 }
 
 .playlist-menu-sep {
   height: 1px;
-  background: #3a3a3a;
+  background: var(--border);
   margin: 4px 2px;
 }
 
@@ -169,8 +103,8 @@ body {
   padding: 4px;
   height: 170px;
   overflow-y: auto;
-  background: #111;
-  border-radius: 4px;
+  background: var(--well);
+  border-radius: var(--radius);
 }
 
 /* Flex para alinear nombre (con elipsis) y duración a la derecha. */
@@ -179,7 +113,7 @@ body {
   align-items: baseline;
   gap: 6px;
   padding: 3px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -201,17 +135,17 @@ body {
 }
 
 .playlist-item:hover {
-  background: #2a2a2a;
+  background: var(--panel);
 }
 
 .playlist-item.selected {
-  background: #3a5a8c;
+  background: var(--selected);
   color: #fff;
 }
 
 /* El estado "sonando" pesa más que la selección: va después en cascada. */
 .playlist-item.playing {
-  background: #1f4d2e;
+  background: var(--playing);
   color: #fff;
 }
 
@@ -222,13 +156,13 @@ body {
 }
 
 .playlist-empty {
-  color: #9a9a9a;
+  color: var(--text-dim);
   font-size: 12px;
   text-align: center;
   padding: 8px 0;
   margin-bottom: 8px;
-  background: #111;
-  border-radius: 4px;
+  background: var(--well);
+  border-radius: var(--radius);
 }
 
 .playlist-empty[hidden] {
@@ -248,11 +182,11 @@ body {
 
 .info-panel {
   width: 240px;
-  background: #262626;
-  border: 1px solid #3a3a3a;
-  border-radius: 8px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-dialog);
   font-size: 13px;
 }
 
@@ -276,7 +210,7 @@ body {
 .info-key {
   flex: none;
   width: 60px;
-  color: #9a9a9a;
+  color: var(--text-dim);
 }
 
 .info-val {
@@ -289,7 +223,7 @@ body {
 }
 
 .info-note {
-  color: #c9a959;
+  color: var(--accent);
   font-size: 12px;
   margin-bottom: 8px;
 }
@@ -301,14 +235,14 @@ body {
 .info-close {
   width: 100%;
   padding: 4px 0;
-  background: #3a3a3a;
+  background: var(--border);
   color: #fff;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius);
   cursor: pointer;
   font: inherit;
 }
 
 .info-close:hover {
-  background: #4a4a4a;
+  background: var(--border-strong);
 }

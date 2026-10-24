@@ -1,7 +1,7 @@
 import type { PlaylistController } from '../playlist/PlaylistController';
 import { parseID3 } from '../metadata/mp3';
 import { resolvePlaylistFile, type BytesReader } from '../playlist/materialize';
-import type { PlaylistItem } from '../playlist/types';
+import type { PlaylistItem, PlaylistState } from '../playlist/types';
 
 /**
  * UI de la playlist — funcional, sin pulir (el aspecto Bento es Fase 3).
@@ -188,7 +188,7 @@ export function createPlaylistUI(
   let lastScrolledPlayingId: string | null = null;
 
   // --- Render desde el store ---
-  store.subscribe((state) => {
+  const render = (state: PlaylistState): void => {
     count.textContent = String(state.items.length);
     emptyMsg.hidden = state.items.length > 0;
     removeBtn.disabled = state.selectedId === null;
@@ -236,7 +236,10 @@ export function createPlaylistUI(
         li?.scrollIntoView({ block: 'nearest' });
       }
     }
-  });
+  };
+  store.subscribe(render);
+  // Primer pintado: el Store no emite al suscribirse.
+  render(store.get());
 
   return el;
 }
