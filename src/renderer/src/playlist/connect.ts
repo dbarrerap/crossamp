@@ -94,7 +94,12 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
 
     playlist.setPlaying(item.id);
     try {
-      await player.loadTrack({ id: item.id, title: item.name, file });
+      await player.loadTrack({
+        id: item.id,
+        title: item.name,
+        file,
+        path: item.path
+      });
       // La duración ya está medida por el engine: la guardamos en el item
       // para que el .m3u se guarde con segundos reales (estilo Winamp).
       const duration = player.store.get().duration;

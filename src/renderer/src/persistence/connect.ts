@@ -54,11 +54,13 @@ export function connectSessionPersistence(deps: SessionDeps): SessionPersistence
 
     if (track) {
       // Si la pista vino de la lista, su item ya trae la ruta; si se abrió
-      // suelta desde el player, hay que resolverla desde el File.
+      // suelta, `track.path` la conserva (la setea quien la conoce) y
+      // webUtils queda como último recurso para Files reales.
       const item =
         deps.playlist.store.get().items.find((entry) => entry.id === track.id) ??
         null;
-      const path = item?.path ?? deps.resolvePath?.(track.file) ?? null;
+      const path =
+        track.path ?? item?.path ?? deps.resolvePath?.(track.file) ?? null;
       if (path) {
         last = {
           name: item?.name ?? track.title,
@@ -119,7 +121,7 @@ export async function restoreSession(deps: SessionDeps): Promise<boolean> {
       basenameOfPath(last.path)
     );
     await deps.player.loadTrack(
-      { id: crypto.randomUUID(), title: last.name, file },
+      { id: crypto.randomUUID(), title: last.name, file, path: last.path },
       { autoplay: false }
     );
     if (last.position > 0) deps.player.seek(last.position);

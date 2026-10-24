@@ -481,6 +481,16 @@ async function runPersistence(): Promise<void> {
   );
   assert(player.store.get().currentTrack?.title === 'Uno', 'restore: pista cargada');
   assert(player.store.get().isPlaying === false, 'restore: carga EN PAUSA');
+
+  // Regresión: tras restaurar, el siguiente guardado no debe borrar `last`
+  // (antes la pista restaurada no tenía ruta y el snapshot la anulaba).
+  const keep = connectSessionPersistence({ player, playlist, storage });
+  keep.flush();
+  assert(
+    loadSession(storage)?.last?.path === '/a/uno.mp3',
+    'restore: el guardado conserva la última pista'
+  );
+  keep.dispose();
   player.dispose();
 
   // Sin bytes (archivo movido): conserva la lista y no lanza.
@@ -1055,6 +1065,10 @@ async function runPlaylistTransport(): Promise<void> {
   assert(
     loaded[loaded.length - 1].title === 'uno',
     'openFile m3u: título sin extensión'
+  );
+  assert(
+    loaded[loaded.length - 1].path === '/abrir/uno.mp3',
+    'openFile m3u: la pista lleva la ruta del item'
   );
 
   const emptyList = await pb6.openFile(new File(['#EXTM3U\n'], 'vacia.m3u'));
