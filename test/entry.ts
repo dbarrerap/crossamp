@@ -14,6 +14,7 @@ import {
 import { PlaylistController } from '../src/renderer/src/playlist/PlaylistController';
 import { resolvePlaylistFile } from '../src/renderer/src/playlist/materialize';
 import { connectPlaylistPlayback } from '../src/renderer/src/playlist/connect';
+import { seekKeyTarget } from '../src/renderer/src/ui/seek';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -101,6 +102,22 @@ async function runOne(path: string): Promise<void> {
   );
   engine.seek(-5);
   assert(engine.getTime() === 0, 'seek(-5) se recorta a 0');
+
+  // Seek mientras suena: corta y re-arranca en el destino (con micro-fade),
+  // y el reloj sigue avanzando desde ahí.
+  engine.play();
+  await sleep(200);
+  const midTarget = Math.min(2, duration / 2);
+  engine.seek(midTarget);
+  await sleep(300);
+  const afterPlayingSeek = engine.getTime();
+  log(`  seek en reproducción -> getTime()=${afterPlayingSeek.toFixed(3)}s`);
+  assert(
+    afterPlayingSeek > midTarget - 0.05,
+    'seek en reproducción: el reloj arranca en el destino'
+  );
+  assert(engine.isPlaying(), 'seek en reproducción: sigue sonando');
+  engine.pause();
 
   // Fin natural dispara onEnded
   let ended = false;
@@ -326,6 +343,21 @@ async function runControllerMetadata(path: string): Promise<void> {
   assert(!currentStillWorks, 'dispose() revoca la object URL vigente');
 
   log('  ===== controller+metadata ok =====');
+}
+
+// Reglas de seek con teclado (puras): flechas, Shift, Home/End y recortes.
+function runSeekKeys(): void {
+  log('\n===== seek: teclado =====');
+  assert(seekKeyTarget('ArrowRight', false, 10, 200) === 15, 'flecha derecha: +5 s');
+  assert(seekKeyTarget('ArrowLeft', false, 10, 200) === 5, 'flecha izquierda: -5 s');
+  assert(seekKeyTarget('ArrowRight', true, 10, 200) === 40, 'Shift+flecha: +30 s');
+  assert(seekKeyTarget('ArrowLeft', false, 3, 200) === 0, 'flecha izquierda: recorta a 0');
+  assert(seekKeyTarget('ArrowRight', false, 198, 200) === 200, 'flecha derecha: recorta al final');
+  assert(seekKeyTarget('Home', false, 42, 200) === 0, 'Home: al inicio');
+  assert(seekKeyTarget('End', false, 42, 200) === 200, 'End: al final');
+  assert(seekKeyTarget('ArrowUp', false, 42, 200) === null, 'tecla que no busca → null');
+  assert(seekKeyTarget('ArrowRight', false, 10, 0) === null, 'sin duración → null');
+  log('  ===== teclado ok =====');
 }
 
 // Validacion del codec M3U y del PlaylistController (Fase 2.1).
@@ -785,6 +817,14 @@ async function main(): Promise<void> {
   } catch (err) {
     failures++;
     log(`[FAIL] excepcion en runPlaylist: ${String(err)}`);
+  }
+
+  // Reglas de seek con teclado (puras, sin audio).
+  try {
+    runSeekKeys();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runSeekKeys: ${String(err)}`);
   }
 
   // Ajustes 2 y 3: transporte playlist ⇄ player (clear, playingId,

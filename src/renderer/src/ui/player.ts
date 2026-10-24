@@ -1,4 +1,5 @@
 import type { PlayerController } from '../state/PlayerController';
+import { seekKeyTarget } from './seek';
 
 /**
  * UI del player — funcional, sin pulir visual.
@@ -37,13 +38,19 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
   time.className = 'player-time';
   time.textContent = '0:00 / 0:00';
 
-  // --- Barra de seek ---
+  // --- Barra de seek (en segundos: la precisión no depende del tema) ---
   const seek = document.createElement('input');
   seek.type = 'range';
   seek.min = '0';
-  seek.max = '1000';
+  seek.max = '1';
+  // "any": toda la resolución del tema; antes se mapeaba a 0..1000, así que
+  // en un tema largo cada paso era > 1 s.
+  seek.step = 'any';
   seek.value = '0';
   seek.className = 'player-seek';
+  seek.setAttribute('aria-label', 'Posición');
+  // true mientras el usuario arrastra el pulgar: solo hay preview, el seek
+  // real se hace al soltar.
   let seeking = false;
 
   // --- Controles ---
@@ -119,20 +126,11 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
     playBtn.disabled =
       state.isLoading ||
       (!state.currentTrack && !state.canStartFromPlaylist);
+    seek.max = String(state.duration > 0 ? state.duration : 1);
     seek.disabled = !state.currentTrack || state.duration === 0;
   });
 
-  // --- Seek: el usuario arrastra, soltamos al final ---
-  seek.addEventListener('pointerdown', () => {
-    seeking = true;
-  });
-  seek.addEventListener('pointerup', () => {
-    seeking = false;
-    const dur = store.get().duration;
-    if (dur > 0) controller.seek((Number(seek.value) / 1000) * dur);
-  });
-
-  // --- Bucle de posición en vivo (rAF) ---
+  // --- Seek ---
   const fmt = (s: number): string => {
     if (!Number.isFinite(s) || s < 0) s = 0;
     const m = Math.floor(s / 60);
@@ -140,12 +138,59 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const tick = (): void => {
-    const pos = controller.getPosition();
+  /** Busca de verdad: recorta, mueve el pulgar y muestra el destino. */
+  const applySeek = (seconds: number): void => {
     const dur = store.get().duration;
-    time.textContent = `${fmt(pos)} / ${fmt(dur)}`;
-    if (!seeking && dur > 0) {
-      seek.value = String(Math.round((pos / dur) * 1000));
+    if (dur <= 0) return;
+    const target = Math.max(0, Math.min(seconds, dur));
+    seek.value = String(target);
+    controller.seek(target);
+    time.textContent = `${fmt(target)} / ${fmt(dur)}`;
+  };
+
+  // Arrastre: preview mientras se mueve; el seek real va al soltar.
+  seek.addEventListener('pointerdown', () => {
+    seeking = true;
+  });
+  seek.addEventListener('pointerup', () => {
+    seeking = false;
+    applySeek(Number(seek.value));
+  });
+  seek.addEventListener('pointercancel', () => {
+    seeking = false;
+  });
+  seek.addEventListener('input', () => {
+    if (seeking) {
+      // Preview: la etiqueta muestra el destino sin tocar el audio.
+      const dur = store.get().duration;
+      time.textContent = `${fmt(Number(seek.value))} / ${fmt(dur)}`;
+    } else {
+      // Sin arrastre (p. ej. lector de pantalla): el input ES la búsqueda.
+      applySeek(Number(seek.value));
+    }
+  });
+
+  // Teclado: flechas ±5 s, Shift ±30 s, Home/End a los extremos.
+  seek.addEventListener('keydown', (e) => {
+    const target = seekKeyTarget(
+      e.key,
+      e.shiftKey,
+      Number(seek.value),
+      store.get().duration
+    );
+    if (target === null) return;
+    e.preventDefault();
+    applySeek(target);
+  });
+
+  // --- Bucle de posición en vivo (rAF) ---
+  const tick = (): void => {
+    // Mientras se arrastra manda el preview; no pisamos el pulgar.
+    if (!seeking) {
+      const pos = controller.getPosition();
+      const dur = store.get().duration;
+      time.textContent = `${fmt(pos)} / ${fmt(dur)}`;
+      if (dur > 0) seek.value = String(pos);
     }
     requestAnimationFrame(tick);
   };
