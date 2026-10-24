@@ -39,6 +39,13 @@ export interface Track {
   /** Nombre del archivo. Sirve de fallback si el tag no trae título. */
   title: string;
   file: File;
+  /**
+   * Ruta en disco, si se conoce. La setea quien la conoce (la playlist al
+   * reproducir un item, la restauración de sesión). La persistencia la usa
+   * para recordar la pista: un File sintético (creado desde bytes) no
+   * expone ruta a webUtils.
+   */
+  path?: string | null;
 }
 
 export const initialPlayerState: PlayerState = {
