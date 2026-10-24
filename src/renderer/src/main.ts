@@ -1,4 +1,7 @@
-import './styles.css';
+import './styles/tokens.css';
+import './styles/base.css';
+import './styles/player.css';
+import './styles/playlist.css';
 import { WebAudioEngine } from './audio/WebAudioEngine';
 import { PlayerController } from './state/PlayerController';
 import { PlaylistController } from './playlist/PlaylistController';
@@ -37,8 +40,12 @@ const playback = connectPlaylistPlayback({
   readFile
 });
 
-root.appendChild(createPlayerUI(controller));
-root.appendChild(
+// Shell de la app: un contenedor por encima de los paneles para que la piel
+// Bento (Fase 3) los maquete como tarjetas.
+const shell = document.createElement('div');
+shell.className = 'app';
+shell.append(
+  createPlayerUI(controller),
   createPlaylistUI(playlist, {
     playItem: (id) => {
       void playback.playItem(id);
@@ -46,5 +53,7 @@ root.appendChild(
     readFile
   })
 );
+
+root.appendChild(shell);
 
 console.info('[crossamp] listo — modo:', window.crossamp ? 'electron' : 'navegador');

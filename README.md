@@ -14,5 +14,5 @@ Flujo: `feature/x` → `dev` → `crossamp`.
 
 - **Fase 1** — UI player + metadata MP3 + transporte de audio + cableado de estado.
 - **Fase 2** — Seek preciso (VU meter descartado por ahora: es visual, no funcional).
-- **Fase 3** — Apariencia Bento (solo visual).
+- **Fase 3** — Apariencia Bento (solo visual): ventana 275×700, grafito + ámbar; tokens en `src/renderer/src/styles/`.
 - **Fase 4** — Gapless playback.
