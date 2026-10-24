@@ -1,8 +1,19 @@
 import { WebAudioEngine } from '../src/renderer/src/audio/WebAudioEngine';
-import { PlayerController } from '../src/renderer/src/state/PlayerController';
+import { PlayerController, type PlaybackHooks } from '../src/renderer/src/state/PlayerController';
 import { parseID3 } from '../src/renderer/src/metadata/mp3';
 import { trackFromFilename } from '../src/renderer/src/metadata/filename';
-import type { Track } from '../src/renderer/src/state/store';
+import { Store, initialPlayerState, type PlayerState, type Track } from '../src/renderer/src/state/store';
+import {
+  parseM3U,
+  serializeM3U,
+  displayNameFromPath,
+  dirnameOf,
+  isAbsolutePath,
+  resolveEntryPath
+} from '../src/renderer/src/playlist/m3u';
+import { PlaylistController } from '../src/renderer/src/playlist/PlaylistController';
+import { resolvePlaylistFile } from '../src/renderer/src/playlist/materialize';
+import { connectPlaylistPlayback } from '../src/renderer/src/playlist/connect';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -317,6 +328,407 @@ async function runControllerMetadata(path: string): Promise<void> {
   log('  ===== controller+metadata ok =====');
 }
 
+// Validacion del codec M3U y del PlaylistController (Fase 2.1).
+// El codec es puro (texto -> entradas), asi que se prueba sin I/O ni
+// Electron. Los items cargados desde .m3u traen file: null a proposito:
+// una lista no se volca a RAM; se lee al reproducir (Fase 2.2).
+function runPlaylist(): void {
+  log('\n===== playlist: codec m3u =====');
+
+  // --- parseM3U: comentarios, EXTINF, CRLF, BOM ---
+  const sample = [
+    '#EXTM3U',
+    '#EXTINF:123,Artista - Título',
+    '/musica/tema.mp3',
+    '',
+    '#EXTINF:-1,Con, coma',
+    'C:\\Music\\otro.flac',
+    '# comentario suelto',
+    'relativa/cancion.ogg'
+  ].join('\r\n');
+  const parsed = parseM3U('\uFEFF' + sample);
+  assert(parsed.length === 3, 'parseM3U: 3 entradas (ignora comentarios y vacías)');
+  assert(parsed[0].path === '/musica/tema.mp3', 'parseM3U: ruta POSIX leída');
+  assert(parsed[0].title === 'Artista - Título', 'parseM3U: título del EXTINF');
+  assert(parsed[1].path === 'C:\\Music\\otro.flac', 'parseM3U: ruta Windows leída');
+  assert(parsed[1].title === 'Con, coma', 'parseM3U: título conserva comas tras la primera');
+  assert(parsed[2].title === null, 'parseM3U: sin EXTINF el título queda null');
+  assert(parsed[2].path === 'relativa/cancion.ogg', 'parseM3U: ruta relativa tal cual');
+
+  // --- serialize -> parse round-trip ---
+  const entries = [
+    { path: '/a/uno.mp3', title: 'Uno' },
+    { path: '/a/dos.mp3', title: null }
+  ];
+  const roundTrip = parseM3U(serializeM3U(entries));
+  assert(roundTrip.length === 2, 'round-trip: 2 entradas');
+  assert(roundTrip[0].path === '/a/uno.mp3' && roundTrip[0].title === 'Uno', 'round-trip: path y título estables');
+  assert(roundTrip[1].title === null, 'round-trip: título null sobrevive');
+  assert(serializeM3U(entries).startsWith('#EXTM3U'), 'serialize: encabezado #EXTM3U presente');
+
+  // --- duraciones del EXTINF ---
+  const withDurs = parseM3U(
+    '#EXTM3U\n#EXTINF:214,Con duración\n/a/214.mp3\n#EXTINF:-1,Sin duración\n/a/menos1.mp3\n#EXTINF:190\n/a/sin-titulo.mp3\n'
+  );
+  assert(withDurs[0].duration === 214, 'parseM3U: duración del EXTINF');
+  assert(withDurs[1].duration === null, 'parseM3U: -1 → duración desconocida');
+  assert(withDurs[2].duration === 190 && withDurs[2].title === null, 'parseM3U: EXTINF sin coma → solo duración');
+  assert(
+    parseM3U('#EXTM3U\n#EXTINF:abc,X\n/a.mp3\n')[0].duration === null,
+    'parseM3U: duración no numérica → null'
+  );
+  assert(
+    serializeM3U([{ path: '/a/uno.mp3', title: 'Uno', duration: 214.4 }]).includes('#EXTINF:214,Uno'),
+    'serialize: duración real (segundos redondeados)'
+  );
+  assert(
+    parseM3U(serializeM3U([{ path: '/a/uno.mp3', title: 'Uno', duration: 214 }]))[0].duration === 214,
+    'round-trip: duración sobrevive'
+  );
+
+  // --- file:// y normalización ---
+  const fileUri = parseM3U('#EXTM3U\nfile:///home/u/tema.mp3\n');
+  assert(fileUri[0].path === '/home/u/tema.mp3', 'file:// POSIX -> ruta');
+  const winUri = parseM3U('#EXTM3U\nfile:///C:/Music/tema.mp3\n');
+  assert(winUri[0].path === 'C:/Music/tema.mp3', 'file:// Windows -> ruta sin barra inicial');
+
+  // --- helpers ---
+  assert(displayNameFromPath('/musica/tema.mp3') === 'tema', 'displayNameFromPath: quita dir y extensión');
+  assert(displayNameFromPath('C:\\x\\cancion.flac') === 'cancion', 'displayNameFromPath: separador Windows');
+  assert(dirnameOf('/a/b/c.m3u') === '/a/b', 'dirnameOf: POSIX');
+  assert(dirnameOf('C:\\a\\p.m3u') === 'C:\\a', 'dirnameOf: Windows');
+  assert(isAbsolutePath('/x') && isAbsolutePath('C:\\x'), 'isAbsolutePath: absolutas reconocidas');
+  assert(!isAbsolutePath('rel/x.mp3'), 'isAbsolutePath: relativa no lo es');
+  assert(resolveEntryPath('t.mp3', '/listas') === '/listas/t.mp3', 'resolveEntryPath: relativa + baseDir');
+  assert(resolveEntryPath('/abs/t.mp3', '/listas') === '/abs/t.mp3', 'resolveEntryPath: absoluta intacta');
+
+  log('\n===== playlist: controller =====');
+  const pl = new PlaylistController();
+
+  // --- agregar (sin resolver de rutas: navegador) ---
+  let emitted = 0;
+  pl.store.subscribe(() => {
+    emitted++;
+  });
+  pl.addFiles([new File([], 'Canción - Bonita.mp3'), new File([], 'otro eh.flac')]);
+  const items = pl.store.get().items;
+  assert(items.length === 2, 'addFiles: 2 items agregados');
+  assert(items[0].name === 'Canción - Bonita', `addFiles: nombre sin extensión (${items[0].name})`);
+  assert(items[0].path === null, 'addFiles: path null sin resolver (navegador)');
+  assert(items[0].file !== null, 'addFiles: file conservado en memoria');
+  assert(emitted === 1, 'addFiles: store emitió una vez');
+
+  // --- selección y quitar ---
+  pl.select(items[1].id);
+  assert(pl.store.get().selectedId === items[1].id, 'select: fija selectedId');
+  pl.removeSelected();
+  const afterRemove = pl.store.get();
+  assert(afterRemove.items.length === 1, 'removeSelected: quitó el seleccionado');
+  assert(afterRemove.items[0].name === 'Canción - Bonita', 'removeSelected: quedó el otro');
+  // Al quitar el seleccionado y aún quedar items, la selección avanza al
+  // restante (estándar de lista), no se anula.
+  assert(
+    afterRemove.selectedId === afterRemove.items[0].id,
+    'removeSelected: selección avanza al item restante'
+  );
+  // Sin selección, quitar es no-op.
+  pl.select(null);
+  pl.removeSelected();
+  assert(pl.store.get().items.length === 1, 'removeSelected: sin selección es no-op');
+
+  // --- selección avanza al siguiente al quitar ---
+  pl.addFiles([new File([], 'b.mp3'), new File([], 'c.mp3'), new File([], 'd.mp3')]);
+  // items: [Canción, b, c, d]
+  pl.select(pl.store.get().items[1].id); // b
+  pl.removeSelected();
+  assert(
+    pl.store.get().items.map((i) => i.name).join(',') === 'Canción - Bonita,c,d',
+    'removeSelected: quita enmedio y conserva orden'
+  );
+  assert(pl.store.get().selectedId === pl.store.get().items[1].id, 'removeSelected: selección avanza al siguiente');
+
+  // --- toM3U con resolver de rutas ---
+  const withPaths = new PlaylistController((file) => `/musica/${file.name}`);
+  withPaths.addFiles([new File([], 'tema.mp3'), new File([], 'otro.mp3')]);
+  const m3uText = withPaths.toM3U();
+  assert(m3uText.includes('/musica/tema.mp3'), 'toM3U: escribe la ruta resuelta');
+  assert(m3uText.includes('#EXTINF:-1,tema'), 'toM3U: escribe EXTINF con nombre');
+  const reparsed = parseM3U(m3uText);
+  assert(reparsed.length === 2 && reparsed[0].path === '/musica/tema.mp3', 'toM3U: round-trip estable');
+
+  // Con duración medida (setDuration): el .m3u lleva segundos reales.
+  withPaths.setDuration(withPaths.store.get().items[0].id, 65.4);
+  assert(withPaths.toM3U().includes('#EXTINF:65,tema'), 'toM3U: duración medida → segundos reales');
+
+  // --- toM3U sin resolver: degrada a nombre ---
+  assert(pl.toM3U().includes('Canción - Bonita'), 'toM3U sin path: degrada a nombre');
+
+  // --- fromM3U: items con file null (no se leen bytes) ---
+  const loaded = new PlaylistController();
+  loaded.fromM3U('#EXTM3U\n#EXTINF:40,Título Bonito\n/musica/cargado.mp3\n');
+  const loadedItems = loaded.store.get().items;
+  assert(loadedItems.length === 1, 'fromM3U: 1 item');
+  assert(loadedItems[0].name === 'Título Bonito', 'fromM3U: usa título del EXTINF');
+  assert(loadedItems[0].file === null, 'fromM3U: file null (bytes no se leen al cargar)');
+  assert(loadedItems[0].path === '/musica/cargado.mp3', 'fromM3U: path guardado');
+  assert(loadedItems[0].duration === 40, 'fromM3U: duración del EXTINF guardada en el item');
+
+  // --- fromM3U con baseDir resuelve relativas ---
+  loaded.fromM3U('relativa.mp3\n', '/listas');
+  assert(loaded.store.get().items[0].path === '/listas/relativa.mp3', 'fromM3U: relativa + baseDir resuelta');
+  assert(loaded.store.get().items[0].name === 'relativa', 'fromM3U: sin EXTINF el nombre sale del archivo');
+
+  // --- fromM3U reemplaza la lista (estilo Winamp: cargar = nueva lista) ---
+  assert(loaded.store.get().items.length === 1, 'fromM3U: reemplaza la lista anterior');
+
+  log('  ===== playlist ok =====');
+}
+
+// ===== Ajustes 2 y 3: transporte playlist ⇄ player =====
+
+/**
+ * Ajuste 1 (limpiar) + playingId + materialización + orquestación con
+ * stub de player. Todo sin audio: valida la lógica de continuidad.
+ */
+async function runPlaylistTransport(): Promise<void> {
+  log('\n===== playlist: limpiar =====');
+  const pl = new PlaylistController();
+  pl.addFiles([new File([], 'a.mp3'), new File([], 'b.mp3')]);
+  let emitted = 0;
+  const off = pl.store.subscribe(() => {
+    emitted++;
+  });
+  pl.clear();
+  assert(pl.store.get().items.length === 0, 'clear: vacía la lista');
+  assert(pl.store.get().selectedId === null, 'clear: deselecciona');
+  assert(pl.store.get().playingId === null, 'clear: playingId a null (no hay continuidad)');
+  assert(emitted === 1, 'clear: emite una vez');
+  pl.clear();
+  assert(emitted === 1, 'clear sobre lista vacía: no-op (no emite)');
+  off();
+
+  log('\n===== playlist: playingId y navegación =====');
+  const pl2 = new PlaylistController();
+  pl2.addFiles([new File([], '1.mp3'), new File([], '2.mp3'), new File([], '3.mp3')]);
+  const [i1, i2, i3] = pl2.store.get().items;
+  assert(pl2.firstItem()?.id === i1.id, 'firstItem: primer item');
+  assert(pl2.nextOf(i1.id)?.id === i2.id, 'nextOf: siguiente correcto');
+  assert(pl2.nextOf(i3.id) === null, 'nextOf: último item → null');
+  assert(pl2.nextOf('inexistente') === null, 'nextOf: id desconocido → null');
+
+  pl2.setPlaying(i2.id);
+  assert(pl2.store.get().playingId === i2.id, 'setPlaying: id válido se fija');
+  pl2.setPlaying('inexistente');
+  assert(pl2.store.get().playingId === null, 'setPlaying: id fuera de la lista → null');
+  pl2.setPlaying(i2.id);
+  pl2.select(i2.id);
+  pl2.removeSelected();
+  assert(pl2.store.get().items.length === 2, 'remove del que suena: la lista queda (audio no se corta)');
+  assert(pl2.store.get().playingId === null, 'remove del que suena: playingId → null (para al terminar)');
+
+  pl2.fromM3U('#EXTM3U\n/otra.mp3\n');
+  assert(pl2.store.get().playingId === null, 'fromM3U: playingId reseteado (lista nueva)');
+
+  log('\n===== playlist: materializar bytes =====');
+  const fileItem = {
+    id: 'x',
+    name: 'memoria',
+    file: new File(['hola'], 'memoria.mp3'),
+    path: '/ruta/memoria.mp3',
+    duration: null
+  };
+  let readCalls = 0;
+  const fakeRead = async (path: string): Promise<Uint8Array | null> => {
+    readCalls++;
+    return new TextEncoder().encode('bytes:' + path);
+  };
+  const direct = await resolvePlaylistFile(fileItem, fakeRead);
+  assert(direct === fileItem.file, 'materializar: item con file → se usa tal cual');
+  assert(readCalls === 0, 'materializar: no toca disco si ya tiene file');
+
+  const diskItem = { id: 'y', name: 'disco', file: null, path: '/musica/tema ok.mp3', duration: null };
+  const fromDisk = await resolvePlaylistFile(diskItem, fakeRead);
+  assert(fromDisk !== null, 'materializar: item de m3u → lee por IPC');
+  assert(fromDisk!.name === 'tema ok.mp3', 'materializar: File nombrado con el basename del path');
+  assert(readCalls === 1, 'materializar: una sola lectura');
+  const bytes = new Uint8Array(await fromDisk!.arrayBuffer());
+  assert(new TextDecoder().decode(bytes) === 'bytes:/musica/tema ok.mp3', 'materializar: bytes correctos');
+
+  const missing = await resolvePlaylistFile(diskItem, async () => null);
+  assert(missing === null, 'materializar: lectura fallida → null (no lanza)');
+  const noReader = await resolvePlaylistFile(diskItem);
+  assert(noReader === null, 'materializar: sin reader (navegador) → null');
+  const noPath = await resolvePlaylistFile({ id: 'z', name: 'nada', file: null, path: null, duration: null });
+  assert(noPath === null, 'materializar: sin file ni path → null');
+
+  log('\n===== playlist: orquestación (stub player) =====');
+  const stubHooks: { current: PlaybackHooks | null } = {
+    current: null
+  };
+  const loaded: Track[] = [];
+  const failIds = new Set<string>();
+  const stub = {
+    store: new Store<PlayerState>(initialPlayerState),
+    setHooks: (h: PlaybackHooks): void => {
+      stubHooks.current = h;
+    },
+    loadTrack: async (t: Track): Promise<void> => {
+      if (failIds.has(t.id)) throw new Error('decode fail');
+      loaded.push(t);
+      // El engine real mide la duración al decodificar: el stub lo imita.
+      stub.store.set({ currentTrack: t, isPlaying: true, duration: 123 });
+    }
+  };
+
+  const pl3 = new PlaylistController();
+  connectPlaylistPlayback({ player: stub, playlist: pl3 });
+  assert(stubHooks.current !== null, 'connect: instaló los hooks en el transporte');
+  assert(stub.store.get().canStartFromPlaylist === false, 'connect: lista vacía → Play sigue deshabilitado');
+
+  pl3.addFiles([new File([], 'uno.mp3'), new File([], 'dos.mp3')]);
+  const [u1, u2] = pl3.store.get().items;
+  assert(stub.store.get().canStartFromPlaylist === true, 'connect: con lista → Play habilitado (req 3)');
+
+  // Req 3: play() sin pista → primer item.
+  const handled = await stubHooks.current!.onPlayEmpty!();
+  assert(handled === true, 'req3: onPlayEmpty manejó la petición');
+  // item.name es el nombre SIN extensión (displayNameFromPath): así viaja
+  // como Track.title, que es lo que la UI muestra como fallback.
+  assert(loaded.length === 1 && loaded[0].title === 'uno', 'req3: cargó el PRIMER item');
+  assert(pl3.store.get().playingId === u1.id, 'req3: playingId = primer item');
+  assert(pl3.store.get().items[0].duration === 123, 'req3: duración medida guardada en el item');
+  assert(stub.store.get().canStartFromPlaylist === true, 'req3: espejo sigue true (hay lista)');
+
+  // Req 2: fin de pista → siguiente.
+  await stubHooks.current!.onTrackEnded!();
+  assert(loaded.length === 2 && loaded[1].title === 'dos', 'req2: onTrackEnded cargó el segundo');
+  assert(pl3.store.get().playingId === u2.id, 'req2: playingId avanzó');
+
+  // Fin de lista → para (decisión de producto: sin repeat).
+  const loadedAtEnd = loaded.length;
+  await stubHooks.current!.onTrackEnded!();
+  assert(loaded.length === loadedAtEnd, 'fin de lista: para (no carga nada)');
+
+  // playingId null → no intenta avanzar.
+  pl3.setPlaying(null);
+  await stubHooks.current!.onTrackEnded!();
+  assert(loaded.length === loadedAtEnd, 'sin playingId: no avanza');
+
+  // Item ilegible en medio: se salta al siguiente legible.
+  const pl4 = new PlaylistController();
+  connectPlaylistPlayback({ player: stub, playlist: pl4 });
+  pl4.addFiles([new File([], 'ok1.mp3')]);
+  pl4.store.set({
+    items: [
+      ...pl4.store.get().items,
+      { id: 'ilegible', name: 'ilegible', file: null, path: null, duration: null },
+      { id: 'ok2', name: 'ok2', file: new File([], 'ok2.mp3'), path: null, duration: null }
+    ]
+  });
+  const [k1, , k2] = pl4.store.get().items;
+  pl4.setPlaying(k1.id);
+  const beforeSkip = loaded.length;
+  await stubHooks.current!.onTrackEnded!();
+  assert(
+    loaded.length === beforeSkip + 1 && loaded[loaded.length - 1].id === k2.id,
+    'item ilegible: se salta y sigue con el siguiente'
+  );
+  assert(pl4.store.get().playingId === k2.id, 'skip: playingId saltó al legible');
+
+  // loadTrack falla → playingId anulado, no promete continuidad.
+  const pl5 = new PlaylistController();
+  const pb5 = connectPlaylistPlayback({ player: stub, playlist: pl5 });
+  pl5.addFiles([new File([], 'rota.mp3')]);
+  const r1 = pl5.store.get().items[0];
+  failIds.add(r1.id);
+  const failResult = await pb5.playItem(r1.id);
+  assert(failResult === false, 'loadTrack fallido → playItem devuelve false');
+  assert(pl5.store.get().playingId === null, 'loadTrack fallido → playingId anulado');
+  failIds.delete(r1.id);
+  const retry = await pb5.playItem(r1.id);
+  assert(retry === true, 'reintento tras fallo → true');
+  assert(pl5.store.get().playingId === r1.id, 'reintento → playingId fijado');
+
+  // play() con hook que no maneja → cae al engine sin lanzar.
+  const enginePlayer = new PlayerController(new WebAudioEngine());
+  let hookCalls = 0;
+  enginePlayer.setHooks({
+    onPlayEmpty: async () => {
+      hookCalls++;
+      return false;
+    }
+  });
+  await enginePlayer.play();
+  assert(hookCalls === 1, 'play() sin pista: invoca onPlayEmpty');
+  assert(enginePlayer.store.get().currentTrack === null, 'play() sin pista ni lista: no-op seguro');
+  enginePlayer.dispose();
+
+  log('  ===== transporte ok =====');
+}
+
+/**
+ * Integración real: MP3 de verdad, engine real, reproducción y avance
+ * automático de pista (los req 2 y 3 de punta a punta).
+ */
+async function runPlaylistIntegration(paths: string[]): Promise<void> {
+  log('\n===== playlist: integración real (auto-avance) =====');
+  if (paths.length === 0) {
+    log('  (sin MP3s: se omite)');
+    return;
+  }
+
+  const toFile = async (p: string): Promise<File> => {
+    const bytes = await window.crossampTest!.readFile(p);
+    const name = p.split(/[\\/]/).pop() ?? 'pista.mp3';
+    return new File([bytes], name);
+  };
+
+  const pl = new PlaylistController();
+  pl.addFiles([await toFile(paths[0]), await toFile(paths[1] ?? paths[0])]);
+  const items = pl.store.get().items;
+
+  const player = new PlayerController(new WebAudioEngine());
+  connectPlaylistPlayback({ player, playlist: pl });
+
+  assert(player.store.get().canStartFromPlaylist, 'req3: Play habilitado con lista y sin pista');
+  assert(player.store.get().currentTrack === null, 'req3: arranca sin pista cargada');
+
+  // Req 3: play() sin pista → reproduce desde el primer item.
+  await player.play();
+  const s1 = player.store.get();
+  assert(s1.currentTrack !== null, 'req3: Play arrancó desde la lista');
+  assert(s1.currentTrack?.title === items[0].name, 'req3: es el PRIMER item');
+  assert(pl.store.get().playingId === items[0].id, 'req3: playingId = primer item');
+  assert(s1.isPlaying, 'req3: reproduciendo');
+  assert(s1.duration > 0, 'req3: duración medida por el engine');
+  const firstItemDur = pl.store.get().items[0].duration;
+  assert(
+    firstItemDur !== null && Math.abs(firstItemDur - s1.duration) < 1,
+    'req3: duración del item = la medida por el engine'
+  );
+
+  // Req 2: acercamos el final y esperamos el avance automático.
+  player.seek(Math.max(0, s1.duration - 0.4));
+  await sleep(2500);
+  const s2 = player.store.get();
+  assert(pl.store.get().playingId === items[1].id, 'req2: avanzó al segundo item');
+  assert(s2.currentTrack?.title === items[1].name, 'req2: segunda pista cargada');
+  assert(s2.isPlaying, 'req2: continúa sonando tras el avance');
+  assert(!player.store.get().isLoading, 'req2: avance terminado (no isLoading)');
+
+  // Fin de lista → para (sin repeat).
+  const dur2 = player.store.get().duration;
+  player.seek(Math.max(0, dur2 - 0.4));
+  await sleep(2500);
+  const s3 = player.store.get();
+  assert(!s3.isPlaying, 'fin de lista: detenido');
+  assert(s3.currentTrack?.title === items[1].name, 'fin de lista: sin cargas nuevas');
+  assert(s3.position >= s3.duration - 0.5, 'fin de lista: posicion al final');
+
+  player.dispose();
+  log('  ===== integración ok =====');
+}
+
 async function main(): Promise<void> {
   if (!window.crossampTest) {
     log('FATAL: API de test no expuesta por el preload');
@@ -364,6 +776,32 @@ async function main(): Promise<void> {
       failures++;
       log(`[FAIL] excepcion en runControllerMetadata: ${String(err)}`);
     }
+  }
+
+  // Codec M3U + controller de playlist (Fase 2.1). No necesita MP3s:
+  // es logica pura sobre texto y File sintéticos.
+  try {
+    runPlaylist();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runPlaylist: ${String(err)}`);
+  }
+
+  // Ajustes 2 y 3: transporte playlist ⇄ player (clear, playingId,
+  // materializar, orquestación con stub).
+  try {
+    await runPlaylistTransport();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runPlaylistTransport: ${String(err)}`);
+  }
+
+  // De punta a punta con MP3 reales: Play desde lista y auto-avance.
+  try {
+    await runPlaylistIntegration(paths);
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runPlaylistIntegration: ${String(err)}`);
   }
 
   log(`\n########## RESULTADO: ${failures === 0 ? 'TODO OK' : `${failures} FALLOS`} ##########`);

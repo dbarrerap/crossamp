@@ -1,10 +1,30 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
+
+/**
+ * Lee un archivo de audio desde disco y devuelve sus bytes al renderer.
+ * Hace falta para reproducir items cargados desde un .m3u: esos items solo
+ * guardan la ruta (no se volcó la lista a RAM), y recién al reproducirlos
+ * pedimos sus bytes por aquí. Devuelve null si no se pudo leer (ruta
+ * faltante, permisos): el renderer avisa y salta el item.
+ */
+ipcMain.handle('playlist:readFile', async (_event, path: unknown) => {
+  if (typeof path !== 'string' || path.length === 0) return null;
+  try {
+    const buf = await readFile(path);
+    // Buffer viaja por structured clone como Uint8Array: llega tal cual.
+    return new Uint8Array(buf);
+  } catch {
+    return null;
+  }
+});
 
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 275,
-    height: 500,
+    // Altura fija que acomoda player (Fase 1) + playlist (Fase 2.1).
+    height: 700,
     title: 'crossamp',
     resizable: false,
     webPreferences: {
