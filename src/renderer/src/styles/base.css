@@ -1,0 +1,37 @@
+/**
+ * Reset mínimo y shell de la aplicación.
+ *
+ * Ventana fija de 275×700: el shell llena la altura y reparte el espacio
+ * sobrante a la playlist (segunda fila 1fr), como el panel inferior Bento.
+ */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 70% at 50% 0%, #232323 0%, #141414 72%) fixed;
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.app {
+  display: grid;
+  /*
+   * minmax(0, 1fr): sin esto la columna implícita crece a max-content y un
+   * título largo (white-space: nowrap) ensancha toda la app; con la carátula
+   * cuadrada (aspect-ratio 1/1) eso desborda en ambos ejes.
+   */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  height: 100vh;
+}
