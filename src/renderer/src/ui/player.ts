@@ -1,17 +1,15 @@
 import type { PlayerState } from '../state/store';
 import type { PlayerController } from '../state/PlayerController';
 import { seekKeyTarget } from './seek';
+import { createIcon } from './icons';
 
 /**
- * UI del player — funcional, sin pulir visual.
+ * UI del player — piel Bento (Fase 3).
  *
- * Esta es la capa de Fase 1: conecta controles reales al PlayerController
- * para que el reproductor funcione de punta a punta. El aspecto Bento
- * llega en la Fase 3 (feature/player-ui); aqui solo importa que funcione.
- *
- * La UI lee el estado del store via subscribe() y pinta. La posición en
- * vivo la lee con getPosition() en un bucle requestAnimationFrame, no del
- * store (evita emitir a 60fps por el pub/sub).
+ * Tarjeta con carátula (o placeholder), info de la pista, tiempo a los lados
+ * del seek y transporte con iconos. La lógica es la misma de Fase 1/2: el
+ * estado llega del store y la posición en vivo se lee con getPosition() en
+ * un requestAnimationFrame (no se emite posición a 60 fps por el pub/sub).
  */
 export function createPlayerUI(controller: PlayerController): HTMLElement {
   const el = document.createElement('div');
@@ -19,11 +17,20 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
 
   const store = controller.store;
 
-  // --- Caratula ---
+  // --- Carátula + placeholder ---
+  const art = document.createElement('div');
+  art.className = 'player-art';
+
   const cover = document.createElement('img');
   cover.className = 'player-cover';
   cover.alt = '';
   cover.hidden = true;
+
+  const artEmpty = document.createElement('div');
+  artEmpty.className = 'player-art-empty';
+  artEmpty.append(createIcon('note'));
+
+  art.append(cover, artEmpty);
 
   // --- Titulo / artista / album ---
   const title = document.createElement('div');
@@ -34,12 +41,21 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
   subtitle.className = 'player-subtitle';
   subtitle.textContent = '';
 
-  // --- Tiempo posicion / duracion ---
+  const meta = document.createElement('div');
+  meta.className = 'player-meta';
+  meta.append(title, subtitle);
+
+  // --- Progreso: tiempo a los lados + barra ---
   const time = document.createElement('div');
   time.className = 'player-time';
-  time.textContent = '0:00 / 0:00';
+  const timeNow = document.createElement('span');
+  timeNow.className = 'player-time-now';
+  timeNow.textContent = '0:00';
+  const timeTotal = document.createElement('span');
+  timeTotal.className = 'player-time-total';
+  timeTotal.textContent = '0:00';
+  time.append(timeNow, timeTotal);
 
-  // --- Barra de seek (en segundos: la precisión no depende del tema) ---
   const seek = document.createElement('input');
   seek.type = 'range';
   seek.min = '0';
@@ -54,17 +70,26 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
   // real se hace al soltar.
   let seeking = false;
 
+  const progress = document.createElement('div');
+  progress.className = 'player-progress';
+  progress.append(time, seek);
+
   // --- Controles ---
   const controls = document.createElement('div');
   controls.className = 'player-controls';
 
   const playBtn = document.createElement('button');
-  playBtn.textContent = 'Play';
+  playBtn.type = 'button';
+  playBtn.className = 'player-btn player-btn-primary';
+  playBtn.append(createIcon('play'));
+  playBtn.setAttribute('aria-label', 'Reproducir');
+  playBtn.title = 'Reproducir';
   playBtn.addEventListener('click', () => controller.toggle());
 
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = 'audio/*';
+  fileInput.hidden = true;
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
     if (!file) return;
@@ -75,24 +100,65 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
       });
   });
 
-  controls.append(playBtn, fileInput);
+  const openBtn = document.createElement('button');
+  openBtn.type = 'button';
+  openBtn.className = 'player-btn player-btn-open';
+  openBtn.append(createIcon('eject'));
+  openBtn.setAttribute('aria-label', 'Abrir archivo');
+  openBtn.title = 'Abrir archivo…';
+  openBtn.addEventListener('click', () => fileInput.click());
 
-  // --- Volumen ---
+  // --- Volumen compacto, a la derecha del transporte ---
   const volume = document.createElement('input');
   volume.type = 'range';
   volume.min = '0';
   volume.max = '100';
   volume.value = '100';
   volume.className = 'player-volume';
+  volume.setAttribute('aria-label', 'Volumen');
+  volume.style.setProperty('--volume-progress', '100%');
   volume.addEventListener('input', () => {
     controller.setVolume(Number(volume.value) / 100);
+    volume.style.setProperty('--volume-progress', `${volume.value}%`);
   });
 
-  el.append(cover, title, subtitle, time, seek, controls, volume);
+  const volumeIcon = document.createElement('span');
+  volumeIcon.className = 'player-volume-icon';
+  volumeIcon.append(createIcon('volume'));
+
+  const volumeWrap = document.createElement('div');
+  volumeWrap.className = 'player-volume-wrap';
+  volumeWrap.append(volumeIcon, volume);
+
+  const spacer = document.createElement('div');
+  spacer.className = 'player-controls-spacer';
+
+  controls.append(playBtn, openBtn, spacer, volumeWrap);
+
+  el.append(art, meta, progress, controls, fileInput);
+
+  // --- Utilidades de tiempo y progreso ---
+  const fmt = (s: number): string => {
+    if (!Number.isFinite(s) || s < 0) s = 0;
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  const setTime = (pos: number, dur: number): void => {
+    timeNow.textContent = fmt(pos);
+    timeTotal.textContent = fmt(dur);
+  };
+
+  /** Relleno del track: la barra pinta el tramo escuchado en ámbar. */
+  const setProgress = (pos: number, dur: number): void => {
+    const pct = dur > 0 ? Math.max(0, Math.min(pos / dur, 1)) * 100 : 0;
+    seek.style.setProperty('--seek-progress', `${pct}%`);
+  };
 
   // --- Render desde el store (estado discreto) ---
   const render = (state: PlayerState): void => {
-    const meta = state.metadata;
+    const tags = state.metadata;
 
     // El titulo prioriza el tag; si no hay, cae al nombre del archivo.
     if (!state.currentTrack) {
@@ -102,16 +168,16 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
       title.textContent = `${state.currentTrack.title} (cargando…)`;
       subtitle.textContent = '';
     } else {
-      title.textContent = meta?.title || state.currentTrack.title;
+      title.textContent = tags?.title || state.currentTrack.title;
       // Subtitulo: artista — album, omitiendo lo que falte.
-      subtitle.textContent = [meta?.artist, meta?.album]
+      subtitle.textContent = [tags?.artist, tags?.album]
         .filter((v): v is string => Boolean(v))
         .join(' — ');
     }
 
     // Caratula: object URL (blob:). Solo cambiamos si cambio la URL; el
     // dueño de revocarla es el controller, no la UI.
-    const pic = state.currentTrack && !state.isLoading ? meta?.picture : null;
+    const pic = state.currentTrack && !state.isLoading ? tags?.picture : null;
     if (pic) {
       if (cover.src !== pic) cover.src = pic;
       cover.hidden = false;
@@ -119,8 +185,14 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
       cover.removeAttribute('src');
       cover.hidden = true;
     }
+    artEmpty.hidden = Boolean(pic);
 
-    playBtn.textContent = state.isPlaying ? 'Pause' : 'Play';
+    // Icono y nombre accesible según el estado (pause = ya suena).
+    playBtn.replaceChildren(createIcon(state.isPlaying ? 'pause' : 'play'));
+    const playLabel = state.isPlaying ? 'Pausar' : 'Reproducir';
+    playBtn.setAttribute('aria-label', playLabel);
+    playBtn.title = playLabel;
+
     // Habilitado si hay pista cargada, O si no la hay pero la playlist
     // está lista para arrancar desde su primer item (canStartFromPlaylist,
     // espejo que mantiene connectPlaylistPlayback).
@@ -135,13 +207,6 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
   render(store.get());
 
   // --- Seek ---
-  const fmt = (s: number): string => {
-    if (!Number.isFinite(s) || s < 0) s = 0;
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
   /** Busca de verdad: recorta, mueve el pulgar y muestra el destino. */
   const applySeek = (seconds: number): void => {
     const dur = store.get().duration;
@@ -149,7 +214,8 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
     const target = Math.max(0, Math.min(seconds, dur));
     seek.value = String(target);
     controller.seek(target);
-    time.textContent = `${fmt(target)} / ${fmt(dur)}`;
+    setTime(target, dur);
+    setProgress(target, dur);
   };
 
   // Arrastre: preview mientras se mueve; el seek real va al soltar.
@@ -164,10 +230,12 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
     seeking = false;
   });
   seek.addEventListener('input', () => {
+    const dur = store.get().duration;
     if (seeking) {
-      // Preview: la etiqueta muestra el destino sin tocar el audio.
-      const dur = store.get().duration;
-      time.textContent = `${fmt(Number(seek.value))} / ${fmt(dur)}`;
+      // Preview: tiempo y relleno muestran el destino sin tocar el audio.
+      const target = Number(seek.value);
+      setTime(target, dur);
+      setProgress(target, dur);
     } else {
       // Sin arrastre (p. ej. lector de pantalla): el input ES la búsqueda.
       applySeek(Number(seek.value));
@@ -193,8 +261,11 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
     if (!seeking) {
       const pos = controller.getPosition();
       const dur = store.get().duration;
-      time.textContent = `${fmt(pos)} / ${fmt(dur)}`;
-      if (dur > 0) seek.value = String(pos);
+      setTime(pos, dur);
+      if (dur > 0) {
+        seek.value = String(pos);
+        setProgress(pos, dur);
+      }
     }
     requestAnimationFrame(tick);
   };

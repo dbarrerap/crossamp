@@ -16,5 +16,10 @@ body {
 }
 
 .app {
-  display: block;
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: start;
+  gap: 8px;
+  padding: 8px;
+  min-height: 100vh;
 }

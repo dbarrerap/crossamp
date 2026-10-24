@@ -42,6 +42,12 @@
   /* Sombras */
   --shadow-menu: 0 6px 16px rgba(0, 0, 0, 0.5);
   --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-panel: 0 8px 20px rgba(0, 0, 0, 0.35);
+
+  /* Tarjetas (paneles Bento) */
+  --panel-grad: linear-gradient(180deg, #2e2e2e 0%, #242424 100%);
+  --radius-panel: 10px;
+  --accent-soft: rgba(224, 160, 48, 0.25);
 
   /* Tipografía */
   --font-ui: system-ui, sans-serif;
