@@ -1,6 +1,7 @@
 import type { PlaybackHooks } from '../state/PlayerController';
 import { Store, type PlayerState, type Track } from '../state/store';
 import type { PlaylistController } from './PlaylistController';
+import { isM3UFileName } from './m3u';
 import { resolvePlaylistFile, type BytesReader } from './materialize';
 
 /**
@@ -46,6 +47,12 @@ export interface TransportPlayer {
 export interface PlaylistPlayback {
   /** Reproduce un item por id y queda como playingId. */
   playItem(id: string): Promise<boolean>;
+  /**
+   * "Open" del eject (en Winamp, getNewFile(clearlist=1)): reemplaza la
+   * lista con el archivo — o con el contenido del .m3u si lo es — y
+   * reproduce el primer item. Devuelve false si no hay nada reproducible.
+   */
+  openFile(file: File): Promise<boolean>;
 }
 
 export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
@@ -121,7 +128,28 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
     }
   });
 
+  /**
+   * Abrir un archivo desde el eject: reemplaza la lista y arranca.
+   *  - .m3u/.m3u8 → se carga como lista (rutas contra su directorio).
+   *  - cualquier otro → la lista pasa a ser ese único archivo.
+   * Es PlayList_delete + LoadPlaylist/append + BeginPlayback de Winamp
+   * (Src/Winamp/OpenFileDialog.cpp).
+   */
+  const openFile = async (file: File): Promise<boolean> => {
+    if (isM3UFileName(file.name)) {
+      const text = await file.text();
+      playlist.fromM3U(text, playlist.baseDirFor(file) ?? undefined);
+    } else {
+      playlist.replaceFiles([file]);
+    }
+
+    const first = playlist.firstItem();
+    if (!first) return false;
+    return playItemById(first.id);
+  };
+
   return {
-    playItem: playItemById
+    playItem: playItemById,
+    openFile
   };
 }
