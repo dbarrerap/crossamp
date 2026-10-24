@@ -10,6 +10,23 @@ Reproductor de audio multiplataforma (Electron + TypeScript) inspirado en Winamp
 
 Flujo: `feature/x` → `dev` → `crossamp`.
 
+## Empaquetar (.app)
+
+Para uso personal, con `@electron/packager`:
+
+```bash
+npm run dist:app
+```
+
+Genera `dist/crossamp-darwin-arm64/crossamp.app` (arquitectura del host).
+El `.app` va **sin firma**: se abre directo en esta máquina; si se copia a
+otra, macOS puede pedir clic derecho → Abrir (o `xattr -cr crossamp.app`).
+Todavía no tiene ícono propio (usa el de Electron).
+
+La app empaquetada guarda su sesión en `~/Library/Application Support/crossamp`
+y usa su propio origen `file://`, así que no hereda la sesión de
+`npm run preview`.
+
 ## Fases
 
 - **Fase 1** — UI player + metadata MP3 + transporte de audio + cableado de estado.
