@@ -60,6 +60,12 @@ shell.append(
   createPlayerUI(controller, {
     openFile: (file) => {
       void playback.openFile(file);
+    },
+    next: () => {
+      void playback.next();
+    },
+    previous: () => {
+      void playback.previous();
     }
   }),
   createPlaylistUI(playlist, {

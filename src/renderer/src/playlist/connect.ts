@@ -53,6 +53,13 @@ export interface PlaylistPlayback {
    * reproduce el primer item. Devuelve false si no hay nada reproducible.
    */
   openFile(file: File): Promise<boolean>;
+  /**
+   * Siguiente item (no envuelve, igual que el fin de lista natural).
+   * Sin playingId arranca desde el primero. Salta ilegibles.
+   */
+  next(): Promise<boolean>;
+  /** Item anterior; false si ya es el primero o no hay nada sonando. */
+  previous(): Promise<boolean>;
 }
 
 export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
@@ -148,8 +155,37 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
     return playItemById(first.id);
   };
 
+  /**
+   * Siguiente: desde playingId; sin playingId, desde el primero. Los
+   * ilegibles se saltan, igual que en el avance automático. En el último
+   * item devuelve false (sin repeat).
+   */
+  const next = async (): Promise<boolean> => {
+    const current = playlist.store.get().playingId;
+    let item = current === null ? playlist.firstItem() : playlist.nextOf(current);
+    while (item) {
+      if (await playItemById(item.id)) return true;
+      item = playlist.nextOf(item.id);
+    }
+    return false;
+  };
+
+  /** Anterior: solo si hay algo sonando y no es el primer item. */
+  const previous = async (): Promise<boolean> => {
+    const current = playlist.store.get().playingId;
+    if (current === null) return false;
+    let item = playlist.prevOf(current);
+    while (item) {
+      if (await playItemById(item.id)) return true;
+      item = playlist.prevOf(item.id);
+    }
+    return false;
+  };
+
   return {
     playItem: playItemById,
-    openFile
+    openFile,
+    next,
+    previous
   };
 }
