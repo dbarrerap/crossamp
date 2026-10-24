@@ -585,10 +585,25 @@ function runUiSmoke(): void {
   }
   assert(opened[0] === chosen, 'UI player: el eject delega en openFile');
 
-  const playBtn = ui.querySelector('.player-controls button') as HTMLButtonElement | null;
+  const playBtn = ui.querySelector('.player-btn-primary') as HTMLButtonElement | null;
+  const prevBtn = ui.querySelector('button[aria-label="Anterior"]') as HTMLButtonElement | null;
+  const nextBtn = ui.querySelector('button[aria-label="Siguiente"]') as HTMLButtonElement | null;
+  assert(
+    playBtn !== null && prevBtn !== null && nextBtn !== null,
+    'UI player: Play/Prev/Next presentes'
+  );
   assert(playBtn?.disabled === true, 'UI player: Play deshabilitado sin pista');
+  assert(prevBtn?.disabled === true, 'UI player: Prev deshabilitado sin pista');
+  assert(nextBtn?.disabled === true, 'UI player: Next deshabilitado sin pista ni lista');
+
   player.store.set({ canStartFromPlaylist: true });
   assert(playBtn?.disabled === false, 'UI player: Play habilitado con lista');
+  assert(nextBtn?.disabled === false, 'UI player: Next habilitado con lista');
+
+  player.store.set({
+    currentTrack: { id: 't', title: 'T', file: new File([], 't.mp3') }
+  });
+  assert(prevBtn?.disabled === false, 'UI player: Prev habilitado con pista');
   player.dispose();
 
   // --- Playlist ---
@@ -863,6 +878,9 @@ async function runPlaylistTransport(): Promise<void> {
   assert(pl2.nextOf(i1.id)?.id === i2.id, 'nextOf: siguiente correcto');
   assert(pl2.nextOf(i3.id) === null, 'nextOf: último item → null');
   assert(pl2.nextOf('inexistente') === null, 'nextOf: id desconocido → null');
+  assert(pl2.prevOf(i2.id)?.id === i1.id, 'prevOf: anterior correcto');
+  assert(pl2.prevOf(i1.id) === null, 'prevOf: primer item → null');
+  assert(pl2.prevOf('inexistente') === null, 'prevOf: id desconocido → null');
 
   pl2.setPlaying(i2.id);
   assert(pl2.store.get().playingId === i2.id, 'setPlaying: id válido se fija');
@@ -1042,6 +1060,61 @@ async function runPlaylistTransport(): Promise<void> {
   const emptyList = await pb6.openFile(new File(['#EXTM3U\n'], 'vacia.m3u'));
   assert(emptyList === false, 'openFile m3u vacío: false');
   assert(pl6.store.get().items.length === 0, 'openFile m3u vacío: lista vacía');
+
+  // Next/Prev: navegación por la lista con la misma continuidad.
+  const pl7 = new PlaylistController();
+  const pb7 = connectPlaylistPlayback({ player: stub, playlist: pl7 });
+  pl7.addFiles([new File([], 'n1.mp3'), new File([], 'n2.mp3'), new File([], 'n3.mp3')]);
+  const [n1, n2, n3] = pl7.store.get().items;
+
+  const nextBoot = await pb7.next();
+  assert(
+    nextBoot === true && pl7.store.get().playingId === n1.id,
+    'next: sin playingId arranca en el primero'
+  );
+  assert(
+    (await pb7.next()) === true && pl7.store.get().playingId === n2.id,
+    'next: avanza'
+  );
+  assert(
+    (await pb7.next()) === true && pl7.store.get().playingId === n3.id,
+    'next: llega al último'
+  );
+  assert(
+    (await pb7.next()) === false && pl7.store.get().playingId === n3.id,
+    'next: en el último no envuelve'
+  );
+
+  assert(
+    (await pb7.previous()) === true && pl7.store.get().playingId === n2.id,
+    'previous: retrocede'
+  );
+  assert(
+    (await pb7.previous()) === true && pl7.store.get().playingId === n1.id,
+    'previous: llega al primero'
+  );
+  assert(
+    (await pb7.previous()) === false && pl7.store.get().playingId === n1.id,
+    'previous: en el primero no hace nada'
+  );
+
+  // Los ilegibles se saltan también al navegar.
+  const pl8 = new PlaylistController();
+  const pb8 = connectPlaylistPlayback({ player: stub, playlist: pl8 });
+  pl8.addFiles([new File([], 'okA.mp3')]);
+  pl8.store.set({
+    items: [
+      ...pl8.store.get().items,
+      { id: 'ilegible2', name: 'ilegible', file: null, path: null, duration: null },
+      { id: 'okB', name: 'okB', file: new File([], 'okB.mp3'), path: null, duration: null }
+    ]
+  });
+  const [a1, , b2] = pl8.store.get().items;
+  pl8.setPlaying(a1.id);
+  assert(
+    (await pb8.next()) === true && pl8.store.get().playingId === b2.id,
+    'next: salta ilegibles'
+  );
 
   // play() con hook que no maneja → cae al engine sin lanzar.
   const enginePlayer = new PlayerController(new WebAudioEngine());

@@ -127,6 +127,14 @@ export class PlaylistController {
     return items[idx + 1] ?? null;
   }
 
+  /** Item anterior a `id`, o null si era el primero. */
+  prevOf(id: string): PlaylistItem | null {
+    const { items } = this.store.get();
+    const idx = items.findIndex((item) => item.id === id);
+    if (idx <= 0) return null;
+    return items[idx - 1] ?? null;
+  }
+
   /**
    * Marca el item que suena. Si el id ya no está en la lista (se quitó o
    * la lista se reemplazó), queda null y la reproducción actual sigue sin

@@ -20,6 +20,9 @@ export function createPlayerUI(
      * vive en main.ts → connect.openFile.
      */
     openFile?: (file: File) => void;
+    /** Siguiente / anterior: misma continuidad que el fin de pista. */
+    next?: () => void;
+    previous?: () => void;
   }
 ): HTMLElement {
   const el = document.createElement('div');
@@ -96,6 +99,22 @@ export function createPlayerUI(
   playBtn.title = 'Reproducir';
   playBtn.addEventListener('click', () => controller.toggle());
 
+  const prevBtn = document.createElement('button');
+  prevBtn.type = 'button';
+  prevBtn.className = 'player-btn player-btn-skip';
+  prevBtn.append(createIcon('prev'));
+  prevBtn.setAttribute('aria-label', 'Anterior');
+  prevBtn.title = 'Anterior';
+  prevBtn.addEventListener('click', () => deps?.previous?.());
+
+  const nextBtn = document.createElement('button');
+  nextBtn.type = 'button';
+  nextBtn.className = 'player-btn player-btn-skip';
+  nextBtn.append(createIcon('next'));
+  nextBtn.setAttribute('aria-label', 'Siguiente');
+  nextBtn.title = 'Siguiente';
+  nextBtn.addEventListener('click', () => deps?.next?.());
+
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   // El eject abre audio o listas: elegir un .m3u lo carga como playlist.
@@ -153,7 +172,7 @@ export function createPlayerUI(
   const spacer = document.createElement('div');
   spacer.className = 'player-controls-spacer';
 
-  controls.append(playBtn, openBtn, spacer, volumeWrap);
+  controls.append(prevBtn, playBtn, nextBtn, openBtn, spacer, volumeWrap);
 
   el.append(art, meta, progress, controls, fileInput);
 
@@ -217,6 +236,11 @@ export function createPlayerUI(
     // está lista para arrancar desde su primer item (canStartFromPlaylist,
     // espejo que mantiene connectPlaylistPlayback).
     playBtn.disabled =
+      state.isLoading ||
+      (!state.currentTrack && !state.canStartFromPlaylist);
+    // Prev necesita una pista; Next puede arrancar desde la lista.
+    prevBtn.disabled = state.isLoading || !state.currentTrack;
+    nextBtn.disabled =
       state.isLoading ||
       (!state.currentTrack && !state.canStartFromPlaylist);
     seek.max = String(state.duration > 0 ? state.duration : 1);
