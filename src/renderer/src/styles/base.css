@@ -24,6 +24,12 @@ body {
 
 .app {
   display: grid;
+  /*
+   * minmax(0, 1fr): sin esto la columna implícita crece a max-content y un
+   * título largo (white-space: nowrap) ensancha toda la app; con la carátula
+   * cuadrada (aspect-ratio 1/1) eso desborda en ambos ejes.
+   */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
   padding: 8px;
