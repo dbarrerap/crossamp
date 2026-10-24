@@ -9,11 +9,13 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "dist:app": "npm run build && electron-packager . crossamp --platform=darwin --out=dist --overwrite --ignore=\"^/(dist|src|test|\\.git|tsconfig|electron\\.vite\\.config|package-lock|README)\"",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test:engine:build": "node test/build.mjs",
     "test:engine": "npm run test:engine:build && node test/run.cjs"
   },
   "devDependencies": {
+    "@electron/packager": "^20.3.0",
     "@types/node": "^24.0.0",
     "electron": "^45.0.0",
     "electron-vite": "^6.0.0",
