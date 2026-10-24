@@ -1,6 +1,13 @@
 import type { AudioEngine } from './AudioEngine';
 
 /**
+ * Duración del micro-fade al buscar mientras suena. Cortar y re-arrancar la
+ * fuente deja un salto de señal audible (click); bajar el gain ~6 ms y subir
+ * en el mismo valle lo elimina sin que se note.
+ */
+const SEEK_FADE_SECONDS = 0.006;
+
+/**
  * Backend de audio sobre Web Audio API.
  *
  * Elección deliberada: usa AudioBufferSourceNode en vez del elemento <audio>.
@@ -26,6 +33,8 @@ export class WebAudioEngine implements AudioEngine {
   /** AudioContext.currentTime en el momento en que empezó a sonar. */
   private startedAt = 0;
   private playing = false;
+  /** Volumen de usuario (0..1). Se guarda para restaurarlo tras el fade de seek. */
+  private volume = 1;
   private endedCallback: (() => void) | null = null;
 
   constructor() {
@@ -88,8 +97,24 @@ export class WebAudioEngine implements AudioEngine {
     const clamped = Math.max(0, Math.min(seconds, this.buffer.duration));
 
     if (this.playing) {
-      this.stopSource();
-      this.startSource(clamped);
+      // Paramos la fuente actual y agendamos la nueva en el valle del fade:
+      // el audio nunca se corta en seco.
+      const now = this.ctx.currentTime;
+      const resumeAt = now + SEEK_FADE_SECONDS;
+
+      if (this.source) {
+        this.source.onended = null; // stop() manual no debe disparar el fin
+        this.source.stop(resumeAt);
+      }
+
+      const gain = this.gain.gain;
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(gain.value, now);
+      gain.linearRampToValueAtTime(0, resumeAt);
+      gain.setValueAtTime(0, resumeAt);
+      gain.linearRampToValueAtTime(this.volume, resumeAt + SEEK_FADE_SECONDS);
+
+      this.startSource(clamped, resumeAt);
     } else {
       this.offset = clamped;
     }
@@ -99,7 +124,10 @@ export class WebAudioEngine implements AudioEngine {
     if (!this.buffer) return 0;
     if (!this.playing) return this.offset;
 
-    const elapsed = this.offset + (this.ctx.currentTime - this.startedAt);
+    // Math.max(0, …): la fuente del seek arranca unos ms en el futuro, y en
+    // ese hueco el reloj no debe retroceder por debajo del destino.
+    const elapsed =
+      this.offset + Math.max(0, this.ctx.currentTime - this.startedAt);
     return Math.min(elapsed, this.buffer.duration);
   }
 
@@ -108,7 +136,8 @@ export class WebAudioEngine implements AudioEngine {
   }
 
   setVolume(volume: number): void {
-    this.gain.gain.value = Math.max(0, Math.min(1, volume));
+    this.volume = Math.max(0, Math.min(1, volume));
+    this.gain.gain.value = this.volume;
   }
 
   onEnded(callback: () => void): void {
@@ -137,20 +166,23 @@ export class WebAudioEngine implements AudioEngine {
     void this.ctx.close();
   }
 
-  private startSource(offset: number): void {
+  private startSource(offset: number, when?: number): void {
     if (!this.buffer) return;
 
+    // when: instante absoluto de AudioContext en el que debe sonar. Omitido
+    // (play normal) = ahora mismo.
+    const startAt = when ?? this.ctx.currentTime;
     const source = this.ctx.createBufferSource();
     source.buffer = this.buffer;
     source.connect(this.gain);
     source.onended = () => this.handleEnded(source);
 
     this.source = source;
-    this.startedAt = this.ctx.currentTime;
+    this.startedAt = startAt;
     this.offset = offset;
 
-    // start(0, offset) arranca `offset` segundos dentro del buffer.
-    source.start(0, offset);
+    // start(when, offset) arranca `offset` segundos dentro del buffer.
+    source.start(startAt, offset);
   }
 
   private stopSource(): void {
