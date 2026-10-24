@@ -7,6 +7,9 @@
  */
 .playlist {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 10px 12px 12px;
   font-size: 13px;
   background: var(--panel-grad);
@@ -134,9 +137,10 @@
 /* --- Lista --- */
 .playlist-list {
   list-style: none;
+  flex: 1;
+  min-height: 120px;
   margin: 0;
   padding: 4px;
-  height: 190px;
   overflow-y: auto;
   background: #171717;
   border: 1px solid rgba(255, 255, 255, 0.04);
@@ -170,6 +174,10 @@
   padding: 4px 8px;
   border-radius: var(--radius);
   cursor: pointer;
+  user-select: none;
+  transition:
+    background 80ms ease,
+    color 80ms ease;
 }
 
 .playlist-item-name {
@@ -191,6 +199,10 @@
 
 .playlist-item:hover {
   background: #242424;
+}
+
+.playlist-item:active {
+  background: #2a2a2a;
 }
 
 .playlist-item.selected {
@@ -217,7 +229,7 @@
   left: 12px;
   right: 12px;
   top: 40px;
-  height: 190px;
+  bottom: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -237,6 +249,7 @@
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;

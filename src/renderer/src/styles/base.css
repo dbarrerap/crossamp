@@ -1,8 +1,8 @@
 /**
  * Reset mínimo y shell de la aplicación.
  *
- * El shell (.app) envuelve los paneles; en el paso 3.2 pasa a grid para
- * maquetar las tarjetas Bento.
+ * Ventana fija de 275×700: el shell llena la altura y reparte el espacio
+ * sobrante a la playlist (segunda fila 1fr), como el panel inferior Bento.
  */
 * {
   box-sizing: border-box;
@@ -10,16 +10,22 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  overflow: hidden;
+  background:
+    radial-gradient(120% 70% at 50% 0%, #232323 0%, #141414 72%) fixed;
   color: var(--text);
   font-family: var(--font-ui);
 }
 
+::selection {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
 .app {
   display: grid;
-  grid-template-rows: auto auto;
-  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
   padding: 8px;
-  min-height: 100vh;
+  height: 100vh;
 }

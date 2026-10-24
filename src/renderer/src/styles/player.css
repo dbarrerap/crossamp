@@ -173,6 +173,9 @@
   border: 1px solid var(--border);
   border-radius: 50%;
   cursor: pointer;
+  transition:
+    color 80ms ease,
+    border-color 80ms ease;
 }
 
 .player-btn svg {
@@ -189,6 +192,15 @@
 .player-btn:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.player-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.player-btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .player-btn-primary {
@@ -214,6 +226,13 @@
 .player-btn-primary:hover:not(:disabled) {
   color: #241a08;
   filter: brightness(1.06);
+}
+
+.player-btn-primary:active:not(:disabled) {
+  filter: brightness(0.98);
+  box-shadow:
+    0 2px 6px rgba(224, 160, 48, 0.18),
+    inset 0 2px 4px rgba(0, 0, 0, 0.25);
 }
 
 .player-btn-open {
