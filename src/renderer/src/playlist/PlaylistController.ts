@@ -123,6 +123,29 @@ export class PlaylistController {
     this.store.set({ playingId: next });
   }
 
+  /**
+   * Reemplaza la lista con items restaurados de una sesión anterior. Solo
+   * entran los que tienen ruta: un item sin ruta no tiene bytes recuperables
+   * al reiniciar la app. No marca nada como sonando.
+   */
+  restore(
+    entries: readonly { name: string; path: string | null; duration: number | null }[]
+  ): void {
+    const items: PlaylistItem[] = [];
+    for (const entry of entries) {
+      if (!entry.path) continue;
+      items.push({
+        id: crypto.randomUUID(),
+        name: entry.name,
+        file: null,
+        path: entry.path,
+        duration: entry.duration
+      });
+    }
+    if (items.length === 0) return;
+    this.store.set({ items, selectedId: null, playingId: null });
+  }
+
   /** Serializa la playlist a texto .m3u (UTF-8). */
   toM3U(): string {
     return serializeM3U(

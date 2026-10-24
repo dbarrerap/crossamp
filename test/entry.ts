@@ -18,6 +18,14 @@ import { seekKeyTarget } from '../src/renderer/src/ui/seek';
 import type { AudioEngine } from '../src/renderer/src/audio/AudioEngine';
 import { createPlayerUI } from '../src/renderer/src/ui/player';
 import { createPlaylistUI } from '../src/renderer/src/ui/playlist';
+import {
+  buildSession,
+  decodeSession,
+  encodeSession,
+  SESSION_VERSION
+} from '../src/renderer/src/persistence/session';
+import { loadSession, saveSession, type StorageLike } from '../src/renderer/src/persistence/storage';
+import { connectSessionPersistence, restoreSession } from '../src/renderer/src/persistence/connect';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -348,6 +356,191 @@ async function runControllerMetadata(path: string): Promise<void> {
   log('  ===== controller+metadata ok =====');
 }
 
+/** Engine falso para tests sin audio (UI, persistencia). */
+function createFakeEngine(): AudioEngine {
+  return {
+    load: async () => {},
+    play: () => {},
+    pause: () => {},
+    seek: () => {},
+    getTime: () => 0,
+    getDuration: () => 100,
+    isPlaying: () => false,
+    setVolume: () => {},
+    onEnded: () => {},
+    dispose: () => {}
+  };
+}
+
+/** Storage en memoria para tests, con la interfaz de localStorage. */
+function createMemoryStorage(): StorageLike & { map: Map<string, string> } {
+  const map = new Map<string, string>();
+  return {
+    map,
+    getItem: (key) => map.get(key) ?? null,
+    setItem: (key, value) => {
+      map.set(key, value);
+    },
+    removeItem: (key) => {
+      map.delete(key);
+    }
+  };
+}
+
+/**
+ * Persistencia de sesión: codec puro, storage con fallos, restore de lista,
+ * loadTrack en pausa y el wiring completo (guardado + restauración).
+ */
+async function runPersistence(): Promise<void> {
+  log('\n===== persistencia: codec y storage =====');
+
+  // --- buildSession: solo items con ruta, con duración y última pista ---
+  const source = new PlaylistController();
+  source.restore([
+    { name: 'Uno', path: '/a/uno.mp3', duration: 65 },
+    { name: 'Sin ruta', path: null, duration: null }
+  ]);
+  const session = buildSession(source.store.get().items, {
+    name: 'Uno',
+    path: '/a/uno.mp3',
+    position: 12.5
+  });
+  assert(session.version === SESSION_VERSION, 'sesión: versión actual');
+  assert(session.playlist.length === 1, 'sesión: descarta items sin ruta');
+  assert(session.playlist[0].duration === 65, 'sesión: conserva duración');
+  assert(session.last?.position === 12.5, 'sesión: conserva posición');
+
+  // --- round-trip ---
+  const decoded = decodeSession(encodeSession(session));
+  assert(
+    decoded !== null &&
+      decoded.playlist[0]?.path === '/a/uno.mp3' &&
+      decoded.last?.name === 'Uno',
+    'sesión: round-trip encode/decode'
+  );
+
+  // --- tolerancia a datos corruptos/antiguos ---
+  assert(decodeSession(null) === null, 'sesión: null → null');
+  assert(decodeSession('no es json') === null, 'sesión: JSON inválido → null');
+  assert(
+    decodeSession(JSON.stringify({ version: 999, playlist: [] })) === null,
+    'sesión: versión desconocida → null'
+  );
+  const tolerant = decodeSession(
+    JSON.stringify({
+      version: SESSION_VERSION,
+      playlist: [
+        { name: 'ok', path: '/ok.mp3', duration: -3 },
+        { name: 'sin path' },
+        'basura'
+      ],
+      last: { name: 'x', path: '', position: -2 }
+    })
+  );
+  assert(
+    tolerant !== null &&
+      tolerant.playlist.length === 1 &&
+      tolerant.playlist[0].duration === null,
+    'sesión: items inválidos descartados y duración saneada'
+  );
+  assert(tolerant?.last === null, 'sesión: última pista inválida descartada');
+
+  // --- storage con fallos ---
+  const storage = createMemoryStorage();
+  saveSession(storage, session);
+  assert(loadSession(storage)?.playlist.length === 1, 'storage: guarda y recupera');
+
+  const broken: StorageLike = {
+    getItem: () => {
+      throw new Error('bloqueado');
+    },
+    setItem: () => {
+      throw new Error('lleno');
+    },
+    removeItem: () => {}
+  };
+  assert(loadSession(broken) === null, 'storage: lectura bloqueada → null');
+  saveSession(broken, session); // no debe lanzar
+  assert(true, 'storage: escritura bloqueada no lanza');
+
+  log('\n===== persistencia: restauración =====');
+  const player = new PlayerController(createFakeEngine());
+  const playlist = new PlaylistController();
+  const restored = await restoreSession({
+    player,
+    playlist,
+    storage,
+    readFile: async () => new Uint8Array([0x49, 0x44, 0x33])
+  });
+  assert(restored === true, 'restore: había sesión');
+  assert(playlist.store.get().items.length === 1, 'restore: lista recuperada');
+  assert(
+    playlist.store.get().selectedId === playlist.store.get().items[0].id,
+    'restore: la pista restaurada queda seleccionada'
+  );
+  assert(player.store.get().currentTrack?.title === 'Uno', 'restore: pista cargada');
+  assert(player.store.get().isPlaying === false, 'restore: carga EN PAUSA');
+  player.dispose();
+
+  // Sin bytes (archivo movido): conserva la lista y no lanza.
+  const player2 = new PlayerController(createFakeEngine());
+  const playlist2 = new PlaylistController();
+  await restoreSession({
+    player: player2,
+    playlist: playlist2,
+    storage,
+    readFile: async () => null
+  });
+  assert(playlist2.store.get().items.length === 1, 'restore sin bytes: conserva la lista');
+  assert(player2.store.get().currentTrack === null, 'restore sin bytes: no carga pista');
+  player2.dispose();
+
+  // --- loadTrack autoplay:false ---
+  const paused = new PlayerController(createFakeEngine());
+  await paused.loadTrack(
+    { id: 'p', title: 'P', file: new File([], 'p.mp3') },
+    { autoplay: false }
+  );
+  assert(!paused.store.get().isPlaying, 'loadTrack autoplay:false: no reproduce');
+  assert(paused.store.get().duration === 100, 'loadTrack autoplay:false: duración reflejada');
+  paused.dispose();
+
+  // --- wiring: guarda al cambiar (flush) ---
+  const player3 = new PlayerController(createFakeEngine());
+  const playlist3 = new PlaylistController();
+  const storage3 = createMemoryStorage();
+  const persistence = connectSessionPersistence({
+    player: player3,
+    playlist: playlist3,
+    storage: storage3
+  });
+  playlist3.restore([{ name: 'Dos', path: '/b/dos.mp3', duration: 30 }]);
+  persistence.flush();
+  const saved = loadSession(storage3);
+  assert(
+    saved !== null &&
+      saved.playlist.length === 1 &&
+      saved.playlist[0].path === '/b/dos.mp3',
+    'wiring: guarda la lista'
+  );
+  persistence.dispose();
+  player3.dispose();
+
+  // Sin sesión guardada: no toca nada y avisa con false.
+  const emptyStorage = createMemoryStorage();
+  const player4 = new PlayerController(createFakeEngine());
+  const playlist4 = new PlaylistController();
+  const nothing = await restoreSession({
+    player: player4,
+    playlist: playlist4,
+    storage: emptyStorage
+  });
+  assert(nothing === false, 'restore: sin sesión → false');
+  player4.dispose();
+
+  log('  ===== persistencia ok =====');
+}
+
 /**
  * Smoke tests de UI (Fase 3): construyen los paneles reales con un engine
  * falso y verifican estructura + interacciones básicas. No reproducen audio;
@@ -356,21 +549,8 @@ async function runControllerMetadata(path: string): Promise<void> {
 function runUiSmoke(): void {
   log('\n===== ui: smoke =====');
 
-  const fakeEngine: AudioEngine = {
-    load: async () => {},
-    play: () => {},
-    pause: () => {},
-    seek: () => {},
-    getTime: () => 0,
-    getDuration: () => 0,
-    isPlaying: () => false,
-    setVolume: () => {},
-    onEnded: () => {},
-    dispose: () => {}
-  };
-
   // --- Player ---
-  const player = new PlayerController(fakeEngine);
+  const player = new PlayerController(createFakeEngine());
   const ui = createPlayerUI(player);
 
   assert(ui.classList.contains('player'), 'UI player: contenedor .player');
@@ -917,6 +1097,14 @@ async function main(): Promise<void> {
   } catch (err) {
     failures++;
     log(`[FAIL] excepcion en runSeekKeys: ${String(err)}`);
+  }
+
+  // Persistencia de sesión (localStorage): codec, storage, restore y wiring.
+  try {
+    await runPersistence();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runPersistence: ${String(err)}`);
   }
 
   // Smoke de UI (Fase 3): estructura de paneles y handlers básicos.

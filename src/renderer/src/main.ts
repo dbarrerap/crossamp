@@ -6,6 +6,7 @@ import { WebAudioEngine } from './audio/WebAudioEngine';
 import { PlayerController } from './state/PlayerController';
 import { PlaylistController } from './playlist/PlaylistController';
 import { connectPlaylistPlayback } from './playlist/connect';
+import { connectSessionPersistence, restoreSession } from './persistence/connect';
 import { createPlayerUI } from './ui/player';
 import { createPlaylistUI } from './ui/playlist';
 
@@ -40,6 +41,17 @@ const playback = connectPlaylistPlayback({
   readFile
 });
 
+// Persistencia de sesión: lista + última pista (en pausa) en localStorage.
+// Browser-portable: sin IPC/rutas la app funciona igual, solo no restaura.
+const session = {
+  player: controller,
+  playlist,
+  storage: window.localStorage,
+  readFile,
+  resolvePath: (file: File) => window.crossamp?.getPathForFile(file) ?? null
+};
+connectSessionPersistence(session);
+
 // Shell de la app: un contenedor por encima de los paneles para que la piel
 // Bento (Fase 3) los maquete como tarjetas.
 const shell = document.createElement('div');
@@ -55,5 +67,9 @@ shell.append(
 );
 
 root.appendChild(shell);
+
+// La restauración es async (IPC + decode): la UI ya está montada y se
+// actualiza sola vía store cuando el estado llegue.
+void restoreSession(session);
 
 console.info('[crossamp] listo — modo:', window.crossamp ? 'electron' : 'navegador');

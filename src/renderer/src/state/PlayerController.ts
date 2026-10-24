@@ -77,7 +77,10 @@ export class PlayerController {
    * antes de decodificar (decodeAudioData lo desengancha), así que nuestro
    * ArrayBuffer sigue siendo válido tras load().
    */
-  async loadTrack(track: Track): Promise<void> {
+  async loadTrack(
+    track: Track,
+    options: { autoplay?: boolean } = {}
+  ): Promise<void> {
     // Capturamos la URL de la pista anterior, notificamos el cambio (la UI
     // suelta su referencia al instante) y recién AHÍ revocamos: ese orden
     // evita que un img siga apuntando a un blob ya revocado.
@@ -114,6 +117,11 @@ export class PlayerController {
       // isPlaying: true; el primer clic en Play se "comía" en un pause()
       // sin efecto. play() re-sincroniza el store con el engine. (Hay pista
       // cargada, así que el hook onPlayEmpty no entra en juego aquí.)
+      if (options.autoplay === false) {
+        // Restauración de sesión: queda cargada y en pausa.
+        this.store.set({ isPlaying: this.engine.isPlaying() });
+        return;
+      }
       await this.play();
     } catch (err) {
       const failedPicture = this.store.get().metadata?.picture ?? null;
