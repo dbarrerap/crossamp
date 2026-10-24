@@ -1,7 +1,10 @@
 import './styles.css';
 import { WebAudioEngine } from './audio/WebAudioEngine';
 import { PlayerController } from './state/PlayerController';
+import { PlaylistController } from './playlist/PlaylistController';
+import { connectPlaylistPlayback } from './playlist/connect';
 import { createPlayerUI } from './ui/player';
+import { createPlaylistUI } from './ui/playlist';
 
 // Punto de entrada del renderer. Debe seguir siendo browser-portable:
 // no importar 'electron' ni APIs de Node. Todo puentado va por window.crossamp.
@@ -13,6 +16,35 @@ if (!root) throw new Error('#app no encontrado');
 const engine = new WebAudioEngine();
 const controller = new PlayerController(engine);
 
+// La playlist resuelve rutas reales via el preload (Electron); en navegador
+// el resolver devuelve null y el guardado del .m3u se degrada a nombres.
+const playlist = new PlaylistController((file) => {
+  const path = window.crossamp?.getPathForFile(file);
+  return path ? path : null;
+});
+
+// readFile (IPC) solo existe en Electron; en navegador solo se reproducen e
+// inspeccionan items que tengan sus bytes en memoria.
+const readFile = window.crossamp
+  ? (path: string) => window.crossamp!.readFile(path)
+  : undefined;
+
+// Unico punto donde playlist y transporte se conocen: Play sin pista arranca
+// desde el primer item, y al terminar una pista sigue con la siguiente.
+const playback = connectPlaylistPlayback({
+  player: controller,
+  playlist,
+  readFile
+});
+
 root.appendChild(createPlayerUI(controller));
+root.appendChild(
+  createPlaylistUI(playlist, {
+    playItem: (id) => {
+      void playback.playItem(id);
+    },
+    readFile
+  })
+);
 
 console.info('[crossamp] listo — modo:', window.crossamp ? 'electron' : 'navegador');

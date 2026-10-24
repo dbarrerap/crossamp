@@ -24,6 +24,14 @@ export interface PlayerState {
   isLoading: boolean;
   /** Metadatos del archivo en reproducción. null si aún no se parsearon. La carátula es una object URL (blob:) cuyo dueño es el PlayerController. */
   metadata: TrackMetadata | null;
+  /**
+   * Espejo del estado de la playlist (lo mantiene connectPlaylistPlayback):
+   * true cuando hay items y no hay pista cargada. La UI del player lo usa
+   * para habilitar Play — "sin pista, pero con lista, ¿reproducir desde el
+   * primer item?". Está aquí para que la UI del player siga leyendo un solo
+   * store.
+   */
+  canStartFromPlaylist: boolean;
 }
 
 export interface Track {
@@ -40,7 +48,8 @@ export const initialPlayerState: PlayerState = {
   duration: 0,
   volume: 1,
   isLoading: false,
-  metadata: null
+  metadata: null,
+  canStartFromPlaylist: false
 };
 
 type Listener<S> = (state: S) => void;

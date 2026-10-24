@@ -113,7 +113,12 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
     }
 
     playBtn.textContent = state.isPlaying ? 'Pause' : 'Play';
-    playBtn.disabled = !state.currentTrack || state.isLoading;
+    // Habilitado si hay pista cargada, O si no la hay pero la playlist
+    // está lista para arrancar desde su primer item (canStartFromPlaylist,
+    // espejo que mantiene connectPlaylistPlayback).
+    playBtn.disabled =
+      state.isLoading ||
+      (!state.currentTrack && !state.canStartFromPlaylist);
     seek.disabled = !state.currentTrack || state.duration === 0;
   });
 

@@ -4,6 +4,26 @@ import type { ParsedTags, TrackMetadata } from '../metadata/types';
 import { Store, initialPlayerState, type PlayerState, type Track } from './store';
 
 /**
+ * Puntos de extensión del transporte, inyectados desde fuera (los arma
+ * connectPlaylistPlayback). El PlayerController NO conoce a la playlist:
+ * solo sabe que, en ciertos momentos, alguien puede querer intervenir.
+ */
+export interface PlaybackHooks {
+  /**
+   * Play pulsado y NO hay pista cargada. Devuelve true si el llamador ya
+   * se encargó (cargó y reprodujo algo); false para caer al comportamiento
+   * normal del engine (no-op si no hay nada cargado).
+   */
+  onPlayEmpty?: () => Promise<boolean>;
+  /**
+   * Una pista terminó naturalmente. El transporte por defecto queda
+   * detenido; con la playlist, este hook carga el siguiente item (auto-play
+   * incluido vía loadTrack). void: si no hay siguiente, no hace nada.
+   */
+  onTrackEnded?: () => Promise<void>;
+}
+
+/**
  * Controller: puente entre el AudioEngine y el Store.
  *
  * Reglas:
@@ -21,18 +41,31 @@ import { Store, initialPlayerState, type PlayerState, type Track } from './store
 export class PlayerController {
   readonly store: Store<PlayerState>;
   private engine: AudioEngine;
+  private hooks: PlaybackHooks = {};
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
     this.store = new Store<PlayerState>(initialPlayerState);
 
     // Fin de pista natural: reflejamos el estado y nos situamos al final.
+    // Después, si hay un hook (playlist), pedimos el siguiente item: como
+    // loadTrack() auto-playea, la continuidad queda garantizada aquí.
     this.engine.onEnded(() => {
       this.store.set({
         isPlaying: false,
         position: this.engine.getDuration()
       });
+      if (this.hooks.onTrackEnded) {
+        this.hooks.onTrackEnded().catch((err) => {
+          console.error('[crossamp] error avanzando de pista', err);
+        });
+      }
     });
+  }
+
+  /** Registra (o limpia con undefined) los hooks del transporte. */
+  setHooks(hooks: PlaybackHooks = {}): void {
+    this.hooks = hooks;
   }
 
   /**
@@ -79,8 +112,9 @@ export class PlayerController {
       // eso implica intención de escucharlo (estilo Winamp). Antes de este
       // arreglo, load() paraba el engine pero el store seguía diciendo
       // isPlaying: true; el primer clic en Play se "comía" en un pause()
-      // sin efecto. play() re-sincroniza el store con el engine.
-      this.play();
+      // sin efecto. play() re-sincroniza el store con el engine. (Hay pista
+      // cargada, así que el hook onPlayEmpty no entra en juego aquí.)
+      await this.play();
     } catch (err) {
       const failedPicture = this.store.get().metadata?.picture ?? null;
       // Nunca dejamos audio huérfano: si el fallo dejó sonando la pista
@@ -116,7 +150,17 @@ export class PlayerController {
     };
   }
 
-  play(): void {
+  /**
+   * Reproduce. Si NO hay pista cargada y hay hook (playlist con items),
+   * el hook intenta arrancar desde la lista (req: "Play con lista cargada
+   * reproduce desde el primer item"). Si el hook no maneja nada, caemos al
+   * engine: sin pista, play() es no-op (comportamiento previo intacto).
+   */
+  async play(): Promise<void> {
+    if (!this.store.get().currentTrack && this.hooks.onPlayEmpty) {
+      const handled = await this.hooks.onPlayEmpty();
+      if (handled) return;
+    }
     this.engine.play();
     this.store.set({ isPlaying: this.engine.isPlaying(), position: this.engine.getTime() });
   }
@@ -129,7 +173,7 @@ export class PlayerController {
   /** Alterna play/pause. */
   toggle(): void {
     if (this.store.get().isPlaying) this.pause();
-    else this.play();
+    else void this.play();
   }
 
   seek(seconds: number): void {
