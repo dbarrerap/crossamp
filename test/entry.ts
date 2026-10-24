@@ -9,6 +9,7 @@ import {
   displayNameFromPath,
   dirnameOf,
   isAbsolutePath,
+  isM3UFileName,
   resolveEntryPath
 } from '../src/renderer/src/playlist/m3u';
 import { PlaylistController } from '../src/renderer/src/playlist/PlaylistController';
@@ -550,8 +551,13 @@ function runUiSmoke(): void {
   log('\n===== ui: smoke =====');
 
   // --- Player ---
+  const opened: File[] = [];
   const player = new PlayerController(createFakeEngine());
-  const ui = createPlayerUI(player);
+  const ui = createPlayerUI(player, {
+    openFile: (file) => {
+      opened.push(file);
+    }
+  });
 
   assert(ui.classList.contains('player'), 'UI player: contenedor .player');
   assert(ui.querySelector('.player-cover') !== null, 'UI player: carátula');
@@ -566,6 +572,18 @@ function runUiSmoke(): void {
     seek !== null && seek.step === 'any' && seek.getAttribute('aria-label') === 'Posición',
     'UI player: seek en segundos y accesible'
   );
+
+  const ejectInput = ui.querySelector('input[type=file]') as HTMLInputElement | null;
+  assert(
+    ejectInput !== null && ejectInput.accept.includes('.m3u'),
+    'UI player: el eject acepta audio y .m3u'
+  );
+  const chosen = new File([], 'elegida.mp3');
+  if (ejectInput) {
+    Object.defineProperty(ejectInput, 'files', { value: [chosen], configurable: true });
+    ejectInput.dispatchEvent(new Event('change'));
+  }
+  assert(opened[0] === chosen, 'UI player: el eject delega en openFile');
 
   const playBtn = ui.querySelector('.player-controls button') as HTMLButtonElement | null;
   assert(playBtn?.disabled === true, 'UI player: Play deshabilitado sin pista');
@@ -697,8 +715,17 @@ function runPlaylist(): void {
   assert(winUri[0].path === 'C:/Music/tema.mp3', 'file:// Windows -> ruta sin barra inicial');
 
   // --- helpers ---
-  assert(displayNameFromPath('/musica/tema.mp3') === 'tema', 'displayNameFromPath: quita dir y extensión');
-  assert(displayNameFromPath('C:\\x\\cancion.flac') === 'cancion', 'displayNameFromPath: separador Windows');
+  assert(displayNameFromPath('/musica/tema.mp3') === 'tema', 'displayNameFromPath: quita dir y extensión');  assert(displayNameFromPath('C:\\x\\cancion.flac') === 'cancion', 'displayNameFromPath: separador Windows');
+
+  // --- detección de listas para el eject ---
+  assert(
+    isM3UFileName('lista.m3u') && isM3UFileName('LISTA.M3U8'),
+    'isM3UFileName: reconoce .m3u/.m3u8'
+  );
+  assert(
+    !isM3UFileName('tema.mp3') && !isM3UFileName('m3u'),
+    'isM3UFileName: rechaza audio y sin extensión'
+  );
   assert(dirnameOf('/a/b/c.m3u') === '/a/b', 'dirnameOf: POSIX');
   assert(dirnameOf('C:\\a\\p.m3u') === 'C:\\a', 'dirnameOf: Windows');
   assert(isAbsolutePath('/x') && isAbsolutePath('C:\\x'), 'isAbsolutePath: absolutas reconocidas');
@@ -750,6 +777,23 @@ function runPlaylist(): void {
     'removeSelected: quita enmedio y conserva orden'
   );
   assert(pl.store.get().selectedId === pl.store.get().items[1].id, 'removeSelected: selección avanza al siguiente');
+
+  // --- replaceFiles: abrir un archivo reemplaza la lista (eject) ---
+  const repl = new PlaylistController();
+  repl.addFiles([new File([], 'vieja1.mp3'), new File([], 'vieja2.mp3')]);
+  const replaced = repl.replaceFiles([new File([], 'nueva.mp3')]);
+  assert(
+    replaced.length === 1 && replaced[0].name === 'nueva',
+    'replaceFiles: devuelve el item creado'
+  );
+  assert(
+    repl.store.get().items.length === 1 && repl.store.get().items[0].name === 'nueva',
+    'replaceFiles: reemplaza la lista'
+  );
+  assert(
+    repl.store.get().selectedId === null && repl.store.get().playingId === null,
+    'replaceFiles: resetea selección y playing'
+  );
 
   // --- toM3U con resolver de rutas ---
   const withPaths = new PlaylistController((file) => `/musica/${file.name}`);
@@ -952,6 +996,52 @@ async function runPlaylistTransport(): Promise<void> {
   const retry = await pb5.playItem(r1.id);
   assert(retry === true, 'reintento tras fallo → true');
   assert(pl5.store.get().playingId === r1.id, 'reintento → playingId fijado');
+
+  // Eject/Open: un archivo reemplaza la lista y suena; un .m3u se carga.
+  const pl6 = new PlaylistController();
+  const pb6 = connectPlaylistPlayback({
+    player: stub,
+    playlist: pl6,
+    readFile: async () => new Uint8Array([1, 2, 3])
+  });
+  pl6.addFiles([new File([], 'previa.mp3')]);
+
+  const beforeOpen = loaded.length;
+  const openedAudio = await pb6.openFile(new File([], 'sola.mp3'));
+  assert(openedAudio === true, 'openFile audio: reproduce');
+  assert(
+    pl6.store.get().items.length === 1 && pl6.store.get().items[0].name === 'sola',
+    'openFile audio: lista de un solo item'
+  );
+  assert(
+    loaded.length === beforeOpen + 1 && loaded[loaded.length - 1].title === 'sola',
+    'openFile audio: carga esa pista'
+  );
+  assert(
+    pl6.store.get().playingId === pl6.store.get().items[0].id,
+    'openFile audio: playingId fijado'
+  );
+
+  const m3uText = '#EXTM3U\n/abrir/uno.mp3\n/abrir/dos.mp3\n';
+  const openedList = await pb6.openFile(new File([m3uText], 'lista.m3u'));
+  assert(openedList === true, 'openFile m3u: reproduce');
+  const openItems = pl6.store.get().items;
+  assert(
+    openItems.length === 2 && openItems[0].path === '/abrir/uno.mp3',
+    'openFile m3u: lista cargada'
+  );
+  assert(
+    pl6.store.get().playingId === openItems[0].id,
+    'openFile m3u: reproduce el primero'
+  );
+  assert(
+    loaded[loaded.length - 1].title === 'uno',
+    'openFile m3u: título sin extensión'
+  );
+
+  const emptyList = await pb6.openFile(new File(['#EXTM3U\n'], 'vacia.m3u'));
+  assert(emptyList === false, 'openFile m3u vacío: false');
+  assert(pl6.store.get().items.length === 0, 'openFile m3u vacío: lista vacía');
 
   // play() con hook que no maneja → cae al engine sin lanzar.
   const enginePlayer = new PlayerController(new WebAudioEngine());

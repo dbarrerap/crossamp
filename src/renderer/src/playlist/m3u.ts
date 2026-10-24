@@ -83,6 +83,11 @@ export function parseM3U(text: string): M3UEntry[] {
   return entries;
 }
 
+/** true si el nombre termina en .m3u/.m3u8 (elección de ruta al abrir). */
+export function isM3UFileName(name: string): boolean {
+  return /\.m3u8?$/i.test(name);
+}
+
 /**
  * Nombre para mostrar de una ruta: solo el archivo, sin directorio ni
  * extensión. Maneja separadores Windows y POSIX.

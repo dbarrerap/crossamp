@@ -57,7 +57,11 @@ connectSessionPersistence(session);
 const shell = document.createElement('div');
 shell.className = 'app';
 shell.append(
-  createPlayerUI(controller),
+  createPlayerUI(controller, {
+    openFile: (file) => {
+      void playback.openFile(file);
+    }
+  }),
   createPlaylistUI(playlist, {
     playItem: (id) => {
       void playback.playItem(id);

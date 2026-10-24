@@ -43,9 +43,27 @@ export class PlaylistController {
 
   /** Agrega archivos elegidos por el usuario. Conserva los items actuales. */
   addFiles(files: Iterable<File>): void {
-    const added: PlaylistItem[] = [];
+    const added = this.toItems(files);
+    if (added.length === 0) return;
+    this.store.set({ items: [...this.store.get().items, ...added] });
+  }
+
+  /**
+   * Reemplaza la lista con los archivos dados (el "Open" del eject en
+   * Winamp: abrir un archivo crea una lista de ese archivo). Devuelve los
+   * items creados; vacío si no se pasó ningún archivo.
+   */
+  replaceFiles(files: Iterable<File>): PlaylistItem[] {
+    const items = this.toItems(files);
+    if (items.length === 0) return [];
+    this.store.set({ items, selectedId: null, playingId: null });
+    return items;
+  }
+
+  private toItems(files: Iterable<File>): PlaylistItem[] {
+    const items: PlaylistItem[] = [];
     for (const file of files) {
-      added.push({
+      items.push({
         id: crypto.randomUUID(),
         name: displayNameFromPath(file.name),
         file,
@@ -53,8 +71,7 @@ export class PlaylistController {
         duration: null
       });
     }
-    if (added.length === 0) return;
-    this.store.set({ items: [...this.store.get().items, ...added] });
+    return items;
   }
 
   /** Selecciona un item (objetivo de quitar). null = deseleccionar. */

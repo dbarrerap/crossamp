@@ -11,7 +11,17 @@ import { createIcon } from './icons';
  * estado llega del store y la posición en vivo se lee con getPosition() en
  * un requestAnimationFrame (no se emite posición a 60 fps por el pub/sub).
  */
-export function createPlayerUI(controller: PlayerController): HTMLElement {
+export function createPlayerUI(
+  controller: PlayerController,
+  deps?: {
+    /**
+     * "Eject"/Open: en Winamp abrir un archivo reemplaza la playlist con
+     * ese archivo (o carga el .m3u) y reproduce. La UI delega; el cableado
+     * vive en main.ts → connect.openFile.
+     */
+    openFile?: (file: File) => void;
+  }
+): HTMLElement {
   const el = document.createElement('div');
   el.className = 'player';
 
@@ -88,11 +98,21 @@ export function createPlayerUI(controller: PlayerController): HTMLElement {
 
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
-  fileInput.accept = 'audio/*';
+  // El eject abre audio o listas: elegir un .m3u lo carga como playlist.
+  fileInput.accept = 'audio/*,.m3u,.m3u8';
   fileInput.hidden = true;
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
+    // Reset para poder re-elegir el mismo archivo (p. ej. reabrir un .m3u).
+    fileInput.value = '';
     if (!file) return;
+
+    if (deps?.openFile) {
+      deps.openFile(file);
+      return;
+    }
+
+    // Sin conector (embed aislado): comportamiento previo, cargar directo.
     void controller
       .loadTrack({ id: crypto.randomUUID(), title: file.name, file })
       .catch((err) => {
