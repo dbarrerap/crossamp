@@ -6,9 +6,11 @@ import { WebAudioEngine } from './audio/WebAudioEngine';
 import { PlayerController } from './state/PlayerController';
 import { PlaylistController } from './playlist/PlaylistController';
 import { connectPlaylistPlayback } from './playlist/connect';
+import { handleDroppedFiles } from './playlist/drop';
 import { connectSessionPersistence, restoreSession } from './persistence/connect';
 import { createPlayerUI } from './ui/player';
 import { createPlaylistUI } from './ui/playlist';
+import { attachFileDrop } from './ui/drop';
 
 // Punto de entrada del renderer. Debe seguir siendo browser-portable:
 // no importar 'electron' ni APIs de Node. Todo puentado va por window.crossamp.
@@ -58,27 +60,39 @@ connectSessionPersistence(session);
 
 // Shell de la app: un contenedor por encima de los paneles para que la piel
 // Bento (Fase 3) los maquete como tarjetas.
+const playerUi = createPlayerUI(controller, {
+  openFile: (file) => {
+    void playback.openFile(file);
+  },
+  next: () => {
+    void playback.next();
+  },
+  previous: () => {
+    void playback.previous();
+  }
+});
+
+const playlistUi = createPlaylistUI(playlist, {
+  playItem: (id) => {
+    void playback.playItem(id);
+  },
+  readFile
+});
+
+// Drag & drop (estilo Winamp): soltar sobre el player reemplaza la lista y
+// reproduce; sobre la playlist agrega al final. Un .m3u se abre como lista
+// en cualquier zona.
+const dropDeps = { playlist, playback };
+attachFileDrop(playerUi, (files) => {
+  void handleDroppedFiles(dropDeps, files, 'replace');
+});
+attachFileDrop(playlistUi, (files) => {
+  void handleDroppedFiles(dropDeps, files, 'append');
+});
+
 const shell = document.createElement('div');
 shell.className = 'app';
-shell.append(
-  createPlayerUI(controller, {
-    openFile: (file) => {
-      void playback.openFile(file);
-    },
-    next: () => {
-      void playback.next();
-    },
-    previous: () => {
-      void playback.previous();
-    }
-  }),
-  createPlaylistUI(playlist, {
-    playItem: (id) => {
-      void playback.playItem(id);
-    },
-    readFile
-  })
-);
+shell.append(playerUi, playlistUi);
 
 root.appendChild(shell);
 

@@ -13,12 +13,14 @@ import {
   resolveEntryPath
 } from '../src/renderer/src/playlist/m3u';
 import { PlaylistController } from '../src/renderer/src/playlist/PlaylistController';
+import { handleDroppedFiles } from '../src/renderer/src/playlist/drop';
 import { resolvePlaylistFile } from '../src/renderer/src/playlist/materialize';
 import { connectPlaylistPlayback } from '../src/renderer/src/playlist/connect';
 import { seekKeyTarget } from '../src/renderer/src/ui/seek';
 import type { AudioEngine } from '../src/renderer/src/audio/AudioEngine';
 import { createPlayerUI } from '../src/renderer/src/ui/player';
 import { createPlaylistUI } from '../src/renderer/src/ui/playlist';
+import { attachFileDrop } from '../src/renderer/src/ui/drop';
 import {
   buildSession,
   decodeSession,
@@ -675,6 +677,11 @@ function runUiSmoke(): void {
     }
   });
 
+  const sortItem = [...plUi.querySelectorAll('.playlist-menu-item')].find(
+    (item) => item.textContent === 'Ordenar por nombre'
+  ) as HTMLButtonElement | undefined;
+  assert(sortItem?.disabled === true, 'UI playlist: orden deshabilitado con <2 items');
+
   assert(plUi.querySelector('.playlist-list')?.tagName === 'OL', 'UI playlist: lista es <ol>');
   assert(
     plUi.querySelector('.playlist-count')?.textContent === '0',
@@ -706,6 +713,33 @@ function runUiSmoke(): void {
 
   rows[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
   assert(playedId === pl.store.get().items[0].id, 'UI playlist: doble clic reproduce');
+
+  // Orden desde el menú.
+  assert(sortItem?.disabled === false, 'UI playlist: orden habilitado con 2 items');
+  sortItem?.click();
+  assert(
+    pl.store.get().items.map((item) => item.name).join(',') === 'Dos,Uno',
+    'UI playlist: ordenar por nombre desde el menú'
+  );
+
+  // --- Zona de drop ---
+  const zone = document.createElement('div');
+  const dropped: File[][] = [];
+  attachFileDrop(zone, (files) => dropped.push(files));
+  const dt = new DataTransfer();
+  dt.items.add(new File([], 'drop.mp3'));
+  zone.dispatchEvent(
+    new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })
+  );
+  assert(zone.classList.contains('drag-over'), 'drop: resalta la zona al arrastrar');
+  zone.dispatchEvent(
+    new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })
+  );
+  assert(
+    dropped.length === 1 && dropped[0][0]?.name === 'drop.mp3',
+    'drop: entrega los archivos'
+  );
+  assert(!zone.classList.contains('drag-over'), 'drop: quita el resaltado');
 
   log('  ===== ui smoke ok =====');
 }
@@ -868,6 +902,38 @@ function runPlaylist(): void {
   assert(
     repl.store.get().selectedId === null && repl.store.get().playingId === null,
     'replaceFiles: resetea selección y playing'
+  );
+
+  // --- orden de la lista: sort / reverse / randomize ---
+  const ord = new PlaylistController();
+  ord.addFiles([new File([], 'c.mp3'), new File([], 'a.mp3'), new File([], 'b.mp3')]);
+  ord.sortBy('name');
+  assert(
+    ord.store.get().items.map((i) => i.name).join(',') === 'a,b,c',
+    'sortBy name: ordena alfabéticamente'
+  );
+  ord.reverse();
+  assert(
+    ord.store.get().items.map((i) => i.name).join(',') === 'c,b,a',
+    'reverse: invierte el orden'
+  );
+
+  const rnd = new PlaylistController();
+  rnd.addFiles([new File([], 'a.mp3'), new File([], 'b.mp3'), new File([], 'c.mp3')]);
+  rnd.randomize(() => 0);
+  assert(
+    rnd.store.get().items.map((i) => i.name).join(',') === 'b,c,a',
+    'randomize: Fisher-Yates determinista'
+  );
+
+  const byPath = new PlaylistController((file) =>
+    file.name === 'a.mp3' ? '/3-a' : file.name === 'b.mp3' ? '/1-b' : '/2-c'
+  );
+  byPath.addFiles([new File([], 'a.mp3'), new File([], 'b.mp3'), new File([], 'c.mp3')]);
+  byPath.sortBy('path');
+  assert(
+    byPath.store.get().items.map((i) => i.name).join(',') === 'b,c,a',
+    'sortBy path: ordena por ruta'
   );
 
   // --- toM3U con resolver de rutas ---
@@ -1223,6 +1289,66 @@ async function runPlaylistTransport(): Promise<void> {
   assert(
     pl9.store.get().playingId === q2.id,
     'loadItem: al terminar avanza al siguiente'
+  );
+
+  // Drag & drop: sobre el player reemplaza y reproduce; sobre la playlist
+  // agrega. Un .m3u se abre como lista en cualquier zona.
+  const dropPlaylist = new PlaylistController();
+  const dropCalls: string[] = [];
+  const dropPlayback = {
+    playItem: async (id: string): Promise<boolean> => {
+      dropCalls.push(`play:${id}`);
+      return true;
+    },
+    openFile: async (file: File): Promise<boolean> => {
+      dropCalls.push(`open:${file.name}`);
+      return true;
+    }
+  };
+
+  dropPlaylist.addFiles([new File([], 'previa.mp3')]);
+  await handleDroppedFiles(
+    { playlist: dropPlaylist, playback: dropPlayback },
+    [new File([], 'uno.mp3'), new File([], 'dos.mp3')],
+    'append'
+  );
+  assert(dropPlaylist.store.get().items.length === 3, 'drop append: agrega sin borrar');
+
+  await handleDroppedFiles(
+    { playlist: dropPlaylist, playback: dropPlayback },
+    [new File([], 'sola.mp3')],
+    'replace'
+  );
+  assert(
+    dropPlaylist.store.get().items.length === 1 &&
+      dropPlaylist.store.get().items[0].name === 'sola',
+    'drop replace: reemplaza la lista'
+  );
+  assert(
+    dropCalls.some((call) => call.startsWith('play:')),
+    'drop replace: reproduce el primero'
+  );
+
+  const openedDrops: string[] = [];
+  const m3uPlaylist = new PlaylistController();
+  await handleDroppedFiles(
+    {
+      playlist: m3uPlaylist,
+      playback: {
+        playItem: async () => true,
+        openFile: async (file: File): Promise<boolean> => {
+          openedDrops.push(file.name);
+          return true;
+        }
+      }
+    },
+    [new File(['#EXTM3U\n'], 'lista.m3u')],
+    'append'
+  );
+  assert(openedDrops[0] === 'lista.m3u', 'drop .m3u: se abre como lista');
+  assert(
+    m3uPlaylist.store.get().items.length === 0,
+    'drop .m3u: no agrega el archivo como item'
   );
 
   // play() con hook que no maneja → cae al engine sin lanzar.
