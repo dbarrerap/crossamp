@@ -48,7 +48,11 @@ const session = {
   playlist,
   storage: window.localStorage,
   readFile,
-  resolvePath: (file: File) => window.crossamp?.getPathForFile(file) ?? null
+  resolvePath: (file: File) => window.crossamp?.getPathForFile(file) ?? null,
+  // La playlist domina: al restaurar, la pista se carga como item de la
+  // lista (mismo id y playingId) para conservar la continuidad.
+  loadItem: (id: string, position: number) =>
+    playback.loadItem(id, { position })
 };
 connectSessionPersistence(session);
 

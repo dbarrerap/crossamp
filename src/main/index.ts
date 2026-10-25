@@ -42,14 +42,30 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
-  createWindow();
+// Una sola instancia: dos procesos comparten `userData` y el segundo
+// arranca sin sesión (LevelDB de localStorage bloqueado). Si ya hay una
+// instancia, enfocamos su ventana y salimos.
+const gotSingleInstance = app.requestSingleInstanceLock();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+if (!gotSingleInstance) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
   });
-});
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+  app.whenReady().then(() => {
+    createWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+}

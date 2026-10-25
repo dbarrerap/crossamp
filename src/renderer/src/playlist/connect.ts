@@ -41,12 +41,19 @@ export interface ConnectDeps {
 export interface TransportPlayer {
   readonly store: Store<PlayerState>;
   setHooks(hooks: PlaybackHooks): void;
-  loadTrack(track: Track): Promise<void>;
+  loadTrack(track: Track, options?: { autoplay?: boolean }): Promise<void>;
+  seek(seconds: number): void;
 }
 
 export interface PlaylistPlayback {
   /** Reproduce un item por id y queda como playingId. */
   playItem(id: string): Promise<boolean>;
+  /**
+   * Carga un item EN PAUSA en la posición dada (restauración de sesión) y
+   * lo deja como playingId. Así el player y la playlist quedan asociados:
+   * la pista actual es el item y al terminar continúa la lista.
+   */
+  loadItem(id: string, options?: { position?: number }): Promise<boolean>;
   /**
    * "Open" del eject (en Winamp, getNewFile(clearlist=1)): reemplaza la
    * lista con el archivo — o con el contenido del .m3u si lo es — y
@@ -77,10 +84,15 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
   syncCanStart();
 
   /**
-   * Carga y reproduce un item. Devuelve false si no era reproducible
-   * (sin bytes ni ruta legible, o fallo de decodificación).
+   * Carga un item desde la playlist, opcionalmente en pausa y en una
+   * posición. Es la ÚNICA forma de cargar un item: así el player y la
+   * playlist quedan asociados por el mismo id y `playingId` marca la pista
+   * actual (continuidad incluida).
    */
-  const playItemById = async (id: string): Promise<boolean> => {
+  const loadItemInternal = async (
+    id: string,
+    options: { autoplay: boolean; position?: number }
+  ): Promise<boolean> => {
     const item = playlist.store.get().items.find((entry) => entry.id === id);
     if (!item) return false;
 
@@ -94,16 +106,23 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
 
     playlist.setPlaying(item.id);
     try {
-      await player.loadTrack({
-        id: item.id,
-        title: item.name,
-        file,
-        path: item.path
-      });
+      await player.loadTrack(
+        {
+          id: item.id,
+          title: item.name,
+          file,
+          path: item.path
+        },
+        { autoplay: options.autoplay }
+      );
       // La duración ya está medida por el engine: la guardamos en el item
       // para que el .m3u se guarde con segundos reales (estilo Winamp).
       const duration = player.store.get().duration;
       playlist.setDuration(item.id, duration > 0 ? duration : null);
+
+      if (options.position !== undefined && options.position > 0) {
+        player.seek(options.position);
+      }
       return true;
     } catch (err) {
       console.error(`[crossamp] error reproduciendo "${item.name}"`, err);
@@ -113,6 +132,17 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
       return false;
     }
   };
+
+  /** Reproduce un item (y queda como playingId). */
+  const playItemById = (id: string): Promise<boolean> =>
+    loadItemInternal(id, { autoplay: true });
+
+  /** Carga un item EN PAUSA en su posición (restauración de sesión). */
+  const loadItem = (
+    id: string,
+    options: { position?: number } = {}
+  ): Promise<boolean> =>
+    loadItemInternal(id, { autoplay: false, position: options.position });
 
   player.setHooks({
     // Play con lista cargada y sin pista: desde el primer item (req 3).
@@ -189,6 +219,7 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
 
   return {
     playItem: playItemById,
+    loadItem,
     openFile,
     next,
     previous
