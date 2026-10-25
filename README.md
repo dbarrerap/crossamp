@@ -10,6 +10,32 @@ Reproductor de audio multiplataforma (Electron + TypeScript) inspirado en Winamp
 
 Flujo: `feature/x` → `dev` → `crossamp`.
 
+## Atajos y teclas multimedia
+
+En la app:
+
+| Atajo | Acción |
+|---|---|
+| Doble clic en un item | Reproduce ese item y sigue con la lista |
+| `Alt+3` | Info de la pista seleccionada (sin reproducirla) |
+| `←` / `→` (con la barra de seek enfocada) | ±5 s |
+| `Shift` + `←` / `→` | ±30 s |
+| `Home` / `End` | Inicio / fin del tema |
+
+Globales (funcionan con la app en segundo plano):
+
+| Atajo | Acción |
+|---|---|
+| `Cmd/Ctrl+Alt+P` | Play / Pausa |
+| `Cmd/Ctrl+Alt+←` | Anterior |
+| `Cmd/Ctrl+Alt+→` | Siguiente |
+
+Teclas multimedia del sistema (MediaSession): play/pausa, anterior/siguiente,
+seek ±10 s y “Now Playing” con título/artista/carátula. En macOS el sistema
+registra la app cuando reproduce audio por primera vez, así que las teclas
+multimedia quedan activas **después del primer Play**; los atajos globales
+funcionan desde el arranque.
+
 ## Estrategia de pruebas
 
 El proyecto usa un **harness propio sobre Electron** (`test/`) en lugar de Jest:
