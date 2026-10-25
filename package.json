@@ -11,6 +11,8 @@
     "preview": "electron-vite preview",
     "dist:app": "npm run build && electron-packager . crossamp --platform=darwin --out=dist --overwrite --ignore=\"^/(dist|src|test|\\.git|tsconfig|electron\\.vite\\.config|package-lock|README)\"",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck:test": "tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --strict --noUnusedLocals --noUnusedParameters --skipLibCheck --lib ES2022,DOM,DOM.Iterable test/entry.ts",
+    "check": "npm run typecheck && npm run typecheck:test && npm run test:engine && npm run build",
     "test:engine:build": "node test/build.mjs",
     "test:engine": "npm run test:engine:build && node test/run.cjs"
   },
