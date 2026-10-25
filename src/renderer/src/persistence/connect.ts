@@ -38,6 +38,12 @@ export interface SessionDeps {
   readFile?: BytesReader;
   /** Ruta real de un File (Electron); null/undefined en navegador. */
   resolvePath?: (file: File) => string | null;
+  /**
+   * Carga un item de la playlist EN PAUSA en su posición. La playlist
+   * domina la pista actual: restauramos a través de ella para que el item
+   * quede como `playingId` y la continuidad funcione.
+   */
+  loadItem?: (id: string, position: number) => Promise<boolean>;
 }
 
 export interface SessionPersistence {
@@ -110,7 +116,25 @@ export async function restoreSession(deps: SessionDeps): Promise<boolean> {
   if (session.playlist.length > 0) deps.playlist.restore(session.playlist);
 
   const last = session.last;
-  if (!last || !deps.readFile) return true;
+  if (!last) return true;
+
+  const match =
+    deps.playlist.store.get().items.find((item) => item.path === last.path) ??
+    null;
+
+  // La playlist domina: si la pista está en la lista restaurada, se carga a
+  // través de ella (mismo id y playingId), en pausa y en su posición.
+  if (match && deps.loadItem) {
+    const loaded = await deps.loadItem(match.id, last.position);
+    if (loaded) {
+      deps.playlist.select(match.id);
+      return true;
+    }
+  }
+
+  // Respaldo para sesiones viejas o pistas sueltas: carga standalone en
+  // pausa (sin asociación con la lista, sin continuidad automática).
+  if (!deps.readFile) return true;
 
   try {
     const bytes = await deps.readFile(last.path);
@@ -126,11 +150,8 @@ export async function restoreSession(deps: SessionDeps): Promise<boolean> {
     );
     if (last.position > 0) deps.player.seek(last.position);
 
-    // La pista restaurada queda SELECCIONADA en la lista (no "sonando":
-    // está en pausa, marcarla con ▶ mentiría).
-    const match = deps.playlist.store
-      .get()
-      .items.find((item) => item.path === last.path);
+    // La pista restaurada queda seleccionada para que Quitar/Info la tomen
+    // sin tener que buscarla.
     if (match) deps.playlist.select(match.id);
 
     return true;

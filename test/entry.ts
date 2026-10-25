@@ -482,6 +482,56 @@ async function runPersistence(): Promise<void> {
   assert(player.store.get().currentTrack?.title === 'Uno', 'restore: pista cargada');
   assert(player.store.get().isPlaying === false, 'restore: carga EN PAUSA');
 
+  // La playlist domina: si la pista está en la lista, se delega loadItem.
+  const playerP = new PlayerController(createFakeEngine());
+  const playlistP = new PlaylistController();
+  const delegated: Array<{ id: string; position: number }> = [];
+  const restoredP = await restoreSession({
+    player: playerP,
+    playlist: playlistP,
+    storage,
+    readFile: async () => new Uint8Array([0x49, 0x44, 0x33]),
+    loadItem: async (id, position) => {
+      delegated.push({ id, position });
+      return true;
+    }
+  });
+  assert(restoredP === true, 'restore playlist: true');
+  assert(delegated.length === 1, 'restore playlist: delega en loadItem');
+  assert(
+    delegated[0].id === playlistP.store.get().items[0].id,
+    'restore playlist: usa el id del item restaurado'
+  );
+  assert(
+    delegated[0].position === 12.5,
+    'restore playlist: pasa la posición guardada'
+  );
+  assert(
+    playlistP.store.get().selectedId === delegated[0].id,
+    'restore playlist: selecciona el item'
+  );
+  assert(
+    playerP.store.get().currentTrack === null,
+    'restore playlist: no carga standalone si la playlist lo hizo'
+  );
+  playerP.dispose();
+
+  // Si la playlist no puede cargarlo, cae al respaldo standalone.
+  const playerF = new PlayerController(createFakeEngine());
+  const playlistF = new PlaylistController();
+  await restoreSession({
+    player: playerF,
+    playlist: playlistF,
+    storage,
+    readFile: async () => new Uint8Array([0x49, 0x44, 0x33]),
+    loadItem: async () => false
+  });
+  assert(
+    playerF.store.get().currentTrack?.title === 'Uno',
+    'restore playlist: fallback standalone si loadItem falla'
+  );
+  playerF.dispose();
+
   // Regresión: tras restaurar, el siguiente guardado no debe borrar `last`
   // (antes la pista restaurada no tenía ruta y el snapshot la anulaba).
   const keep = connectSessionPersistence({ player, playlist, storage });
@@ -942,17 +992,29 @@ async function runPlaylistTransport(): Promise<void> {
     current: null
   };
   const loaded: Track[] = [];
+  const seeks: number[] = [];
   const failIds = new Set<string>();
   const stub = {
     store: new Store<PlayerState>(initialPlayerState),
     setHooks: (h: PlaybackHooks): void => {
       stubHooks.current = h;
     },
-    loadTrack: async (t: Track): Promise<void> => {
+    loadTrack: async (
+      t: Track,
+      options?: { autoplay?: boolean }
+    ): Promise<void> => {
       if (failIds.has(t.id)) throw new Error('decode fail');
       loaded.push(t);
       // El engine real mide la duración al decodificar: el stub lo imita.
-      stub.store.set({ currentTrack: t, isPlaying: true, duration: 123 });
+      // Con autoplay:false la pista queda cargada en pausa.
+      stub.store.set({
+        currentTrack: t,
+        isPlaying: options?.autoplay !== false,
+        duration: 123
+      });
+    },
+    seek: (seconds: number): void => {
+      seeks.push(seconds);
     }
   };
 
@@ -1128,6 +1190,39 @@ async function runPlaylistTransport(): Promise<void> {
   assert(
     (await pb8.next()) === true && pl8.store.get().playingId === b2.id,
     'next: salta ilegibles'
+  );
+
+  // loadItem (restauración): carga EN PAUSA, asociada a la lista.
+  const pl9 = new PlaylistController();
+  const pb9 = connectPlaylistPlayback({
+    player: stub,
+    playlist: pl9,
+    readFile: async () => new Uint8Array([1])
+  });
+  pl9.restore([
+    { name: 'r1', path: '/r/uno.mp3', duration: null },
+    { name: 'r2', path: '/r/dos.mp3', duration: null }
+  ]);
+  const [q1, q2] = pl9.store.get().items;
+
+  const loadedItem = await pb9.loadItem(q1.id, { position: 30 });
+  assert(loadedItem === true, 'loadItem: carga el item');
+  assert(pl9.store.get().playingId === q1.id, 'loadItem: queda como playingId');
+  assert(
+    loaded[loaded.length - 1].id === q1.id &&
+      loaded[loaded.length - 1].path === '/r/uno.mp3',
+    'loadItem: misma pista e id que el item de la lista'
+  );
+  assert(stub.store.get().isPlaying === false, 'loadItem: en pausa');
+  assert(seeks[seeks.length - 1] === 30, 'loadItem: aplica la posición');
+  assert(pl9.store.get().items[0].duration === 123, 'loadItem: guarda la duración');
+
+  // Continuidad: la pista restaurada queda asociada, así que al terminar
+  // avanza al siguiente item (el bug que reportó el usuario).
+  await stubHooks.current!.onTrackEnded!();
+  assert(
+    pl9.store.get().playingId === q2.id,
+    'loadItem: al terminar avanza al siguiente'
   );
 
   // play() con hook que no maneja → cae al engine sin lanzar.
