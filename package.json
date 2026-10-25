@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "Reproductor de audio cross-platform inspirado en Winamp",
+  "author": "David E. Barrera",
+  "license": "MIT",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
