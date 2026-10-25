@@ -29,6 +29,8 @@ import {
 } from '../src/renderer/src/persistence/session';
 import { loadSession, saveSession, type StorageLike } from '../src/renderer/src/persistence/storage';
 import { connectSessionPersistence, restoreSession } from '../src/renderer/src/persistence/connect';
+import { connectMediaSession, type MediaSessionLike } from '../src/renderer/src/media/session';
+import { handleMediaAction } from '../src/renderer/src/media/actions';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -744,9 +746,141 @@ function runUiSmoke(): void {
   log('  ===== ui smoke ok =====');
 }
 
+/**
+ * Teclas multimedia y atajos globales: despacho de acciones y MediaSession
+ * con fakes (metadata, playbackState y handlers).
+ */
+function runMedia(): void {
+  log('\n===== media: teclas y atajos =====');
+
+  // --- Despacho de acciones de los atajos globales ---
+  const toggles: string[] = [];
+  const calls: string[] = [];
+  const actionDeps = {
+    player: {
+      toggle: () => {
+        toggles.push('toggle');
+      }
+    },
+    playback: {
+      next: async () => {
+        calls.push('next');
+        return true;
+      },
+      previous: async () => {
+        calls.push('previous');
+        return true;
+      }
+    }
+  };
+
+  assert(
+    handleMediaAction('play-pause', actionDeps) === true && toggles.length === 1,
+    'media action: play-pause'
+  );
+  assert(handleMediaAction('next', actionDeps) === true, 'media action: next');
+  assert(handleMediaAction('previous', actionDeps) === true, 'media action: previous');
+  assert(calls.join(',') === 'next,previous', 'media action: despacha next/previous');
+  assert(handleMediaAction('desconocida', actionDeps) === false, 'media action: desconocida → false');
+
+  // --- MediaSession ---
+  let playingFlag = false;
+  let lastSeek = -1;
+  const engine: AudioEngine = {
+    load: async () => {},
+    play: () => {
+      playingFlag = true;
+    },
+    pause: () => {
+      playingFlag = false;
+    },
+    seek: (seconds: number) => {
+      lastSeek = seconds;
+    },
+    getTime: () => 42,
+    getDuration: () => 100,
+    isPlaying: () => playingFlag,
+    setVolume: () => {},
+    onEnded: () => {},
+    dispose: () => {}
+  };
+
+  const player = new PlayerController(engine);
+  const trackCalls: string[] = [];
+  const playback = {
+    next: async () => {
+      trackCalls.push('next');
+      return true;
+    },
+    previous: async () => {
+      trackCalls.push('previous');
+      return true;
+    }
+  };
+
+  const handlers = new Map<string, (details?: { seekTime?: number }) => void>();
+  const session: MediaSessionLike = {
+    metadata: null,
+    playbackState: 'none',
+    setActionHandler: (action, handler) => {
+      if (handler) {
+        handlers.set(action, handler as unknown as (details?: { seekTime?: number }) => void);
+      } else {
+        handlers.delete(action);
+      }
+    }
+  };
+
+  const metas: Array<{ title?: string; artist?: string; album?: string }> = [];
+  connectMediaSession({
+    player,
+    playback,
+    mediaSession: session,
+    createMetadata: (init) => {
+      metas.push(init);
+      return init as unknown as MediaMetadata;
+    }
+  });
+
+  assert(session.playbackState === 'none', 'mediaSession: none sin pista');
+
+  player.store.set({
+    currentTrack: { id: 'm1', title: 'T', file: new File([], 't.mp3') },
+    metadata: { title: 'Canción', artist: 'Artista', album: 'Álbum', picture: null },
+    duration: 100
+  });
+  assert(session.playbackState === 'paused', 'mediaSession: paused con pista');
+  assert(
+    metas[metas.length - 1]?.title === 'Canción' &&
+      metas[metas.length - 1]?.artist === 'Artista',
+    'mediaSession: metadata del tag'
+  );
+
+  player.store.set({ isPlaying: true });
+  assert(session.playbackState === 'playing', 'mediaSession: playing');
+
+  handlers.get('pause')?.();
+  assert(player.store.get().isPlaying === false, 'mediaSession: pause');
+  handlers.get('play')?.();
+  assert(player.store.get().isPlaying === true, 'mediaSession: play');
+
+  handlers.get('nexttrack')?.();
+  handlers.get('previoustrack')?.();
+  assert(trackCalls.join(',') === 'next,previous', 'mediaSession: next/previous');
+
+  handlers.get('seekforward')?.();
+  assert(lastSeek === 52, 'mediaSession: seekforward +10 s');
+  handlers.get('seekbackward')?.();
+  assert(lastSeek === 32, 'mediaSession: seekbackward -10 s');
+  handlers.get('seekto')?.({ seekTime: 12 });
+  assert(lastSeek === 12, 'mediaSession: seekto');
+
+  player.dispose();
+  log('  ===== media ok =====');
+}
+
 // Reglas de seek con teclado (puras): flechas, Shift, Home/End y recortes.
-function runSeekKeys(): void {
-  log('\n===== seek: teclado =====');
+function runSeekKeys(): void {  log('\n===== seek: teclado =====');
   assert(seekKeyTarget('ArrowRight', false, 10, 200) === 15, 'flecha derecha: +5 s');
   assert(seekKeyTarget('ArrowLeft', false, 10, 200) === 5, 'flecha izquierda: -5 s');
   assert(seekKeyTarget('ArrowRight', true, 10, 200) === 40, 'Shift+flecha: +30 s');
@@ -1495,6 +1629,14 @@ async function main(): Promise<void> {
   } catch (err) {
     failures++;
     log(`[FAIL] excepcion en runSeekKeys: ${String(err)}`);
+  }
+
+  // Teclas multimedia / atajos globales (con fakes).
+  try {
+    runMedia();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runMedia: ${String(err)}`);
   }
 
   // Persistencia de sesión (localStorage): codec, storage, restore y wiring.

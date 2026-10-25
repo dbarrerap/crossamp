@@ -8,6 +8,8 @@ import { PlaylistController } from './playlist/PlaylistController';
 import { connectPlaylistPlayback } from './playlist/connect';
 import { handleDroppedFiles } from './playlist/drop';
 import { connectSessionPersistence, restoreSession } from './persistence/connect';
+import { connectMediaSession } from './media/session';
+import { handleMediaAction } from './media/actions';
 import { createPlayerUI } from './ui/player';
 import { createPlaylistUI } from './ui/playlist';
 import { attachFileDrop } from './ui/drop';
@@ -57,6 +59,13 @@ const session = {
     playback.loadItem(id, { position })
 };
 connectSessionPersistence(session);
+
+// Integración con el sistema: Now Playing + teclas multimedia (MediaSession)
+// y atajos globales propios (main → IPC).
+connectMediaSession({ player: controller, playback });
+window.crossamp?.onMediaControl((action) => {
+  handleMediaAction(action, { player: controller, playback });
+});
 
 // Shell de la app: un contenedor por encima de los paneles para que la piel
 // Bento (Fase 3) los maquete como tarjetas.

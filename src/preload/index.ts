@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 
 // Puente IPC expuesto al renderer como `window.crossamp`.
 // La UI (browser-portable) NUNCA importa 'electron' directamente; habla
@@ -26,6 +26,18 @@ const api = {
       return Promise.resolve(null);
     }
     return ipcRenderer.invoke('playlist:readFile', path) as Promise<Uint8Array | null>;
+  },
+
+  // Acciones de transporte disparadas por los atajos globales del main
+  // ('play-pause' | 'next' | 'previous'). Devuelve un unsubscribe.
+  onMediaControl(callback: (action: string) => void): () => void {
+    const listener = (_event: IpcRendererEvent, action: string): void => {
+      callback(action);
+    };
+    ipcRenderer.on('media:control', listener);
+    return () => {
+      ipcRenderer.removeListener('media:control', listener);
+    };
   }
 };
 
