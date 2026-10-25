@@ -114,6 +114,50 @@ export class PlaylistController {
     this.store.set({ items: [], selectedId: null, playingId: null });
   }
 
+  /**
+   * Ordena la lista por nombre visible o por ruta. La selección y el
+   * playingId son ids, así que sobreviven al cambio de orden.
+   */
+  sortBy(by: 'name' | 'path'): void {
+    const { items } = this.store.get();
+    if (items.length < 2) return;
+
+    const collator = new Intl.Collator('es', {
+      sensitivity: 'base',
+      numeric: true
+    });
+    const key = (item: PlaylistItem): string =>
+      by === 'path' ? (item.path ?? item.name) : item.name;
+
+    const sorted = [...items].sort((a, b) => collator.compare(key(a), key(b)));
+    this.store.set({ items: sorted });
+  }
+
+  /** Invierte el orden actual de la lista. */
+  reverse(): void {
+    const { items } = this.store.get();
+    if (items.length < 2) return;
+    this.store.set({ items: [...items].reverse() });
+  }
+
+  /**
+   * Baraja la lista (Fisher-Yates) — distinto del shuffle de reproducción.
+   * `rng` es inyectable para poder testear un orden determinista.
+   */
+  randomize(rng: () => number = Math.random): void {
+    const { items } = this.store.get();
+    if (items.length < 2) return;
+
+    const shuffled = [...items];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const tmp = shuffled[i];
+      shuffled[i] = shuffled[j];
+      shuffled[j] = tmp;
+    }
+    this.store.set({ items: shuffled });
+  }
+
   /** Primer item de la lista (entrada de "Play" con lista cargada). */
   firstItem(): PlaylistItem | null {
     return this.store.get().items[0] ?? null;

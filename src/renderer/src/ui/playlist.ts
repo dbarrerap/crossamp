@@ -165,7 +165,8 @@ export function createPlaylistUI(
     }
   });
 
-  // --- Ítems del menú, en 2 grupos ---
+  // --- Ítems del menú ---
+  // Grupos: archivos/ítems · administración · orden · inspección.
   // Grupo 1: manejo directo de archivos/ítems — agrega y quita lo marcado.
   menuItem('Agregar archivos…', () => addInput.click());
   const removeBtn = menuItem('Quitar seleccionado', () => controller.removeSelected());
@@ -180,7 +181,13 @@ export function createPlaylistUI(
   const clearBtn = menuItem('Limpiar lista', () => controller.clear());
   clearBtn.title = 'Vacía la lista (no detiene la pista en reproducción)';
   menuSeparator();
-  // Grupo aparte: inspección — no muta la lista ni la persiste.
+  // Grupo 3: orden de la lista (no cambia qué suena).
+  const sortName = menuItem('Ordenar por nombre', () => controller.sortBy('name'));
+  const sortPath = menuItem('Ordenar por ruta', () => controller.sortBy('path'));
+  const reverseBtn = menuItem('Invertir orden', () => controller.reverse());
+  const randomBtn = menuItem('Aleatorio', () => controller.randomize());
+  menuSeparator();
+  // Grupo 4: inspección — no muta la lista ni la persiste.
   const infoBtn = menuItem('Info de la pista…', openInfo);
 
   el.append(header, menu, emptyMsg, list, addInput, loadInput);
@@ -194,6 +201,12 @@ export function createPlaylistUI(
     removeBtn.disabled = state.selectedId === null;
     clearBtn.disabled = state.items.length === 0;
     infoBtn.disabled = state.selectedId === null;
+
+    const canOrder = state.items.length > 1;
+    sortName.disabled = !canOrder;
+    sortPath.disabled = !canOrder;
+    reverseBtn.disabled = !canOrder;
+    randomBtn.disabled = !canOrder;
 
     list.replaceChildren(
       ...state.items.map((item) => {

@@ -12,6 +12,12 @@ export interface CrossampApi {
    * puro no existe.
    */
   readFile(path: string): Promise<Uint8Array | null>;
+  /**
+   * Acciones del transporte enviadas por los atajos globales del main
+   * ('play-pause' | 'next' | 'previous'). Devuelve la función para darse
+   * de baja.
+   */
+  onMediaControl(callback: (action: string) => void): () => void;
 }
 
 declare global {

@@ -35,3 +35,10 @@ body {
   padding: 8px;
   height: 100vh;
 }
+
+/* Realce de zona al arrastrar archivos (attachFileDrop). */
+.player.drag-over,
+.playlist.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
