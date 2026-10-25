@@ -13,12 +13,14 @@ import {
   resolveEntryPath
 } from '../src/renderer/src/playlist/m3u';
 import { PlaylistController } from '../src/renderer/src/playlist/PlaylistController';
+import { handleDroppedFiles } from '../src/renderer/src/playlist/drop';
 import { resolvePlaylistFile } from '../src/renderer/src/playlist/materialize';
 import { connectPlaylistPlayback } from '../src/renderer/src/playlist/connect';
 import { seekKeyTarget } from '../src/renderer/src/ui/seek';
 import type { AudioEngine } from '../src/renderer/src/audio/AudioEngine';
 import { createPlayerUI } from '../src/renderer/src/ui/player';
 import { createPlaylistUI } from '../src/renderer/src/ui/playlist';
+import { attachFileDrop } from '../src/renderer/src/ui/drop';
 import {
   buildSession,
   decodeSession,
@@ -27,6 +29,8 @@ import {
 } from '../src/renderer/src/persistence/session';
 import { loadSession, saveSession, type StorageLike } from '../src/renderer/src/persistence/storage';
 import { connectSessionPersistence, restoreSession } from '../src/renderer/src/persistence/connect';
+import { connectMediaSession, type MediaSessionLike } from '../src/renderer/src/media/session';
+import { handleMediaAction } from '../src/renderer/src/media/actions';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -675,6 +679,11 @@ function runUiSmoke(): void {
     }
   });
 
+  const sortItem = [...plUi.querySelectorAll('.playlist-menu-item')].find(
+    (item) => item.textContent === 'Ordenar por nombre'
+  ) as HTMLButtonElement | undefined;
+  assert(sortItem?.disabled === true, 'UI playlist: orden deshabilitado con <2 items');
+
   assert(plUi.querySelector('.playlist-list')?.tagName === 'OL', 'UI playlist: lista es <ol>');
   assert(
     plUi.querySelector('.playlist-count')?.textContent === '0',
@@ -707,12 +716,171 @@ function runUiSmoke(): void {
   rows[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
   assert(playedId === pl.store.get().items[0].id, 'UI playlist: doble clic reproduce');
 
+  // Orden desde el menú.
+  assert(sortItem?.disabled === false, 'UI playlist: orden habilitado con 2 items');
+  sortItem?.click();
+  assert(
+    pl.store.get().items.map((item) => item.name).join(',') === 'Dos,Uno',
+    'UI playlist: ordenar por nombre desde el menú'
+  );
+
+  // --- Zona de drop ---
+  const zone = document.createElement('div');
+  const dropped: File[][] = [];
+  attachFileDrop(zone, (files) => dropped.push(files));
+  const dt = new DataTransfer();
+  dt.items.add(new File([], 'drop.mp3'));
+  zone.dispatchEvent(
+    new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })
+  );
+  assert(zone.classList.contains('drag-over'), 'drop: resalta la zona al arrastrar');
+  zone.dispatchEvent(
+    new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })
+  );
+  assert(
+    dropped.length === 1 && dropped[0][0]?.name === 'drop.mp3',
+    'drop: entrega los archivos'
+  );
+  assert(!zone.classList.contains('drag-over'), 'drop: quita el resaltado');
+
   log('  ===== ui smoke ok =====');
 }
 
+/**
+ * Teclas multimedia y atajos globales: despacho de acciones y MediaSession
+ * con fakes (metadata, playbackState y handlers).
+ */
+function runMedia(): void {
+  log('\n===== media: teclas y atajos =====');
+
+  // --- Despacho de acciones de los atajos globales ---
+  const toggles: string[] = [];
+  const calls: string[] = [];
+  const actionDeps = {
+    player: {
+      toggle: () => {
+        toggles.push('toggle');
+      }
+    },
+    playback: {
+      next: async () => {
+        calls.push('next');
+        return true;
+      },
+      previous: async () => {
+        calls.push('previous');
+        return true;
+      }
+    }
+  };
+
+  assert(
+    handleMediaAction('play-pause', actionDeps) === true && toggles.length === 1,
+    'media action: play-pause'
+  );
+  assert(handleMediaAction('next', actionDeps) === true, 'media action: next');
+  assert(handleMediaAction('previous', actionDeps) === true, 'media action: previous');
+  assert(calls.join(',') === 'next,previous', 'media action: despacha next/previous');
+  assert(handleMediaAction('desconocida', actionDeps) === false, 'media action: desconocida → false');
+
+  // --- MediaSession ---
+  let playingFlag = false;
+  let lastSeek = -1;
+  const engine: AudioEngine = {
+    load: async () => {},
+    play: () => {
+      playingFlag = true;
+    },
+    pause: () => {
+      playingFlag = false;
+    },
+    seek: (seconds: number) => {
+      lastSeek = seconds;
+    },
+    getTime: () => 42,
+    getDuration: () => 100,
+    isPlaying: () => playingFlag,
+    setVolume: () => {},
+    onEnded: () => {},
+    dispose: () => {}
+  };
+
+  const player = new PlayerController(engine);
+  const trackCalls: string[] = [];
+  const playback = {
+    next: async () => {
+      trackCalls.push('next');
+      return true;
+    },
+    previous: async () => {
+      trackCalls.push('previous');
+      return true;
+    }
+  };
+
+  const handlers = new Map<string, (details?: { seekTime?: number }) => void>();
+  const session: MediaSessionLike = {
+    metadata: null,
+    playbackState: 'none',
+    setActionHandler: (action, handler) => {
+      if (handler) {
+        handlers.set(action, handler as unknown as (details?: { seekTime?: number }) => void);
+      } else {
+        handlers.delete(action);
+      }
+    }
+  };
+
+  const metas: Array<{ title?: string; artist?: string; album?: string }> = [];
+  connectMediaSession({
+    player,
+    playback,
+    mediaSession: session,
+    createMetadata: (init) => {
+      metas.push(init);
+      return init as unknown as MediaMetadata;
+    }
+  });
+
+  assert(session.playbackState === 'none', 'mediaSession: none sin pista');
+
+  player.store.set({
+    currentTrack: { id: 'm1', title: 'T', file: new File([], 't.mp3') },
+    metadata: { title: 'Canción', artist: 'Artista', album: 'Álbum', picture: null },
+    duration: 100
+  });
+  assert(session.playbackState === 'paused', 'mediaSession: paused con pista');
+  assert(
+    metas[metas.length - 1]?.title === 'Canción' &&
+      metas[metas.length - 1]?.artist === 'Artista',
+    'mediaSession: metadata del tag'
+  );
+
+  player.store.set({ isPlaying: true });
+  assert(session.playbackState === 'playing', 'mediaSession: playing');
+
+  handlers.get('pause')?.();
+  assert(player.store.get().isPlaying === false, 'mediaSession: pause');
+  handlers.get('play')?.();
+  assert(player.store.get().isPlaying === true, 'mediaSession: play');
+
+  handlers.get('nexttrack')?.();
+  handlers.get('previoustrack')?.();
+  assert(trackCalls.join(',') === 'next,previous', 'mediaSession: next/previous');
+
+  handlers.get('seekforward')?.();
+  assert(lastSeek === 52, 'mediaSession: seekforward +10 s');
+  handlers.get('seekbackward')?.();
+  assert(lastSeek === 32, 'mediaSession: seekbackward -10 s');
+  handlers.get('seekto')?.({ seekTime: 12 });
+  assert(lastSeek === 12, 'mediaSession: seekto');
+
+  player.dispose();
+  log('  ===== media ok =====');
+}
+
 // Reglas de seek con teclado (puras): flechas, Shift, Home/End y recortes.
-function runSeekKeys(): void {
-  log('\n===== seek: teclado =====');
+function runSeekKeys(): void {  log('\n===== seek: teclado =====');
   assert(seekKeyTarget('ArrowRight', false, 10, 200) === 15, 'flecha derecha: +5 s');
   assert(seekKeyTarget('ArrowLeft', false, 10, 200) === 5, 'flecha izquierda: -5 s');
   assert(seekKeyTarget('ArrowRight', true, 10, 200) === 40, 'Shift+flecha: +30 s');
@@ -868,6 +1036,38 @@ function runPlaylist(): void {
   assert(
     repl.store.get().selectedId === null && repl.store.get().playingId === null,
     'replaceFiles: resetea selección y playing'
+  );
+
+  // --- orden de la lista: sort / reverse / randomize ---
+  const ord = new PlaylistController();
+  ord.addFiles([new File([], 'c.mp3'), new File([], 'a.mp3'), new File([], 'b.mp3')]);
+  ord.sortBy('name');
+  assert(
+    ord.store.get().items.map((i) => i.name).join(',') === 'a,b,c',
+    'sortBy name: ordena alfabéticamente'
+  );
+  ord.reverse();
+  assert(
+    ord.store.get().items.map((i) => i.name).join(',') === 'c,b,a',
+    'reverse: invierte el orden'
+  );
+
+  const rnd = new PlaylistController();
+  rnd.addFiles([new File([], 'a.mp3'), new File([], 'b.mp3'), new File([], 'c.mp3')]);
+  rnd.randomize(() => 0);
+  assert(
+    rnd.store.get().items.map((i) => i.name).join(',') === 'b,c,a',
+    'randomize: Fisher-Yates determinista'
+  );
+
+  const byPath = new PlaylistController((file) =>
+    file.name === 'a.mp3' ? '/3-a' : file.name === 'b.mp3' ? '/1-b' : '/2-c'
+  );
+  byPath.addFiles([new File([], 'a.mp3'), new File([], 'b.mp3'), new File([], 'c.mp3')]);
+  byPath.sortBy('path');
+  assert(
+    byPath.store.get().items.map((i) => i.name).join(',') === 'b,c,a',
+    'sortBy path: ordena por ruta'
   );
 
   // --- toM3U con resolver de rutas ---
@@ -1225,6 +1425,66 @@ async function runPlaylistTransport(): Promise<void> {
     'loadItem: al terminar avanza al siguiente'
   );
 
+  // Drag & drop: sobre el player reemplaza y reproduce; sobre la playlist
+  // agrega. Un .m3u se abre como lista en cualquier zona.
+  const dropPlaylist = new PlaylistController();
+  const dropCalls: string[] = [];
+  const dropPlayback = {
+    playItem: async (id: string): Promise<boolean> => {
+      dropCalls.push(`play:${id}`);
+      return true;
+    },
+    openFile: async (file: File): Promise<boolean> => {
+      dropCalls.push(`open:${file.name}`);
+      return true;
+    }
+  };
+
+  dropPlaylist.addFiles([new File([], 'previa.mp3')]);
+  await handleDroppedFiles(
+    { playlist: dropPlaylist, playback: dropPlayback },
+    [new File([], 'uno.mp3'), new File([], 'dos.mp3')],
+    'append'
+  );
+  assert(dropPlaylist.store.get().items.length === 3, 'drop append: agrega sin borrar');
+
+  await handleDroppedFiles(
+    { playlist: dropPlaylist, playback: dropPlayback },
+    [new File([], 'sola.mp3')],
+    'replace'
+  );
+  assert(
+    dropPlaylist.store.get().items.length === 1 &&
+      dropPlaylist.store.get().items[0].name === 'sola',
+    'drop replace: reemplaza la lista'
+  );
+  assert(
+    dropCalls.some((call) => call.startsWith('play:')),
+    'drop replace: reproduce el primero'
+  );
+
+  const openedDrops: string[] = [];
+  const m3uPlaylist = new PlaylistController();
+  await handleDroppedFiles(
+    {
+      playlist: m3uPlaylist,
+      playback: {
+        playItem: async () => true,
+        openFile: async (file: File): Promise<boolean> => {
+          openedDrops.push(file.name);
+          return true;
+        }
+      }
+    },
+    [new File(['#EXTM3U\n'], 'lista.m3u')],
+    'append'
+  );
+  assert(openedDrops[0] === 'lista.m3u', 'drop .m3u: se abre como lista');
+  assert(
+    m3uPlaylist.store.get().items.length === 0,
+    'drop .m3u: no agrega el archivo como item'
+  );
+
   // play() con hook que no maneja → cae al engine sin lanzar.
   const enginePlayer = new PlayerController(new WebAudioEngine());
   let hookCalls = 0;
@@ -1369,6 +1629,14 @@ async function main(): Promise<void> {
   } catch (err) {
     failures++;
     log(`[FAIL] excepcion en runSeekKeys: ${String(err)}`);
+  }
+
+  // Teclas multimedia / atajos globales (con fakes).
+  try {
+    runMedia();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runMedia: ${String(err)}`);
   }
 
   // Persistencia de sesión (localStorage): codec, storage, restore y wiring.
