@@ -80,3 +80,7 @@ y usa su propio origen `file://`, así que no hereda la sesión de
 - **Fase 2** — Seek preciso (VU meter descartado por ahora: es visual, no funcional).
 - **Fase 3** — Apariencia Bento (solo visual): ventana 275×700, grafito + ámbar; tokens en `src/renderer/src/styles/`.
 - **Fase 4** — Gapless playback.
+
+## Licencia
+
+MIT © 2026 David E. Barrera. Ver [LICENSE](LICENSE).
