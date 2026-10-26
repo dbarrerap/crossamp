@@ -38,6 +38,18 @@ const api = {
     return () => {
       ipcRenderer.removeListener('media:control', listener);
     };
+  },
+
+  // Editor de tags (Alt+3): solo MP3. El main valida y escribe con backup
+  // temporal + rename atómico.
+  writeTags(
+    path: string,
+    tags: { title: string; artist: string; album: string }
+  ): Promise<{ ok: boolean; error?: string }> {
+    return ipcRenderer.invoke('tags:write', path, tags) as Promise<{
+      ok: boolean;
+      error?: string;
+    }>;
   }
 };
 

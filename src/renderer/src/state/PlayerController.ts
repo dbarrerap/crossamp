@@ -1,6 +1,6 @@
 import type { AudioEngine } from '../audio/AudioEngine';
 import { parseID3 } from '../metadata/mp3';
-import type { ParsedTags, TrackMetadata } from '../metadata/types';
+import type { ParsedTags, TagEdit, TrackMetadata } from '../metadata/types';
 import { Store, initialPlayerState, type PlayerState, type Track } from './store';
 
 /**
@@ -278,6 +278,23 @@ export class PlayerController {
   setVolume(volume: number): void {
     this.engine.setVolume(volume);
     this.store.set({ volume });
+  }
+
+  /**
+   * Refleja en el store los tags recién guardados en disco, sin cortar la
+   * reproducción. Si estaban vacíos, quedan en null (la UI cae al nombre).
+   */
+  patchTags(tags: TagEdit): void {
+    const metadata = this.store.get().metadata;
+    if (!metadata) return;
+    this.store.set({
+      metadata: {
+        ...metadata,
+        title: tags.title.trim() || null,
+        artist: tags.artist.trim() || null,
+        album: tags.album.trim() || null
+      }
+    });
   }
 
   /** Posición en vivo, en segundos. La UI la lee en su bucle rAF. */

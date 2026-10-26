@@ -1,3 +1,5 @@
+import type { TagEdit, TagWriteResult } from './src/metadata/types';
+
 export interface CrossampApi {
   platform: NodeJS.Platform | string;
   /**
@@ -18,6 +20,11 @@ export interface CrossampApi {
    * de baja.
    */
   onMediaControl(callback: (action: string) => void): () => void;
+  /**
+   * Guarda los tags (Título/Artista/Álbum) de un MP3 en disco. El main
+   * valida la ruta y escribe con backup temporal + rename atómico.
+   */
+  writeTags(path: string, tags: TagEdit): Promise<TagWriteResult>;
 }
 
 declare global {

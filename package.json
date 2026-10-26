@@ -27,5 +27,8 @@
     "electron-vite": "^6.0.0",
     "typescript": "^5.9.3",
     "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "node-id3": "^0.2.9"
   }
 }

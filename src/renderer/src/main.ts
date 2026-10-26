@@ -10,6 +10,7 @@ import { handleDroppedFiles } from './playlist/drop';
 import { connectSessionPersistence, restoreSession } from './persistence/connect';
 import { connectMediaSession } from './media/session';
 import { handleMediaAction } from './media/actions';
+import type { TagEdit } from './metadata/types';
 import { createPlayerUI } from './ui/player';
 import { createPlaylistUI } from './ui/playlist';
 import { attachFileDrop } from './ui/drop';
@@ -35,6 +36,11 @@ const playlist = new PlaylistController((file) => {
 // inspeccionan items que tengan sus bytes en memoria.
 const readFile = window.crossamp
   ? (path: string) => window.crossamp!.readFile(path)
+  : undefined;
+
+// Editor de tags (Alt+3): solo Electron puede escribir en disco.
+const writeTags = window.crossamp
+  ? (path: string, tags: TagEdit) => window.crossamp!.writeTags(path, tags)
   : undefined;
 
 // Unico punto donde playlist y transporte se conocen: Play sin pista arranca
@@ -85,7 +91,16 @@ const playlistUi = createPlaylistUI(playlist, {
   playItem: (id) => {
     void playback.playItem(id);
   },
-  readFile
+  readFile,
+  writeTags,
+  onTagsSaved: (id, tags) => {
+    // Refleja el título nuevo en la lista y, si es la pista actual, en el
+    // player (sin cortar la reproducción).
+    playlist.applyTagEdit(id, tags.title);
+    if (controller.store.get().currentTrack?.id === id) {
+      controller.patchTags(tags);
+    }
+  }
 });
 
 // Drag & drop (estilo Winamp): soltar sobre el player reemplaza la lista y
