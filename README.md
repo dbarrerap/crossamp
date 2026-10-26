@@ -57,22 +57,30 @@ Nota: cierra cualquier `npm run preview` (u otra app Electron) antes de
 `test:engine`; un proceso abierto retiene el dispositivo de audio y los tests
 de reloj fallan.
 
-## Empaquetar (.app)
+## Empaquetar
 
-Para uso personal, con `@electron/packager`:
+Con `@electron/packager`:
 
-```bash
-npm run dist:app
-```
+| Comando | Salida |
+|---|---|
+| `npm run dist:app` | App para el SO/arquitectura del host |
+| `npm run dist:mac` | `dist/crossamp-darwin-<arch>/crossamp.app` |
+| `npm run dist:win` | `dist/crossamp-win32-x64/crossamp.exe` |
 
-Genera `dist/crossamp-darwin-arm64/crossamp.app` (arquitectura del host).
-El `.app` va **sin firma**: se abre directo en esta máquina; si se copia a
-otra, macOS puede pedir clic derecho → Abrir (o `xattr -cr crossamp.app`).
-Todavía no tiene ícono propio (usa el de Electron).
+El script es `scripts/package.mjs` (acepta plataforma y arquitectura). Se puede
+empaquetar para Windows desde macOS; conviene probar el `.exe` en Windows.
+
+Los binarios van **sin firma**. En macOS se abren directo en esta máquina; si
+se copian a otra, puede pedir clic derecho → Abrir (o `xattr -cr crossamp.app`).
+En Windows, SmartScreen puede advertir (Más información → Ejecutar de todos
+modos). Todavía no hay ícono propio: si existe `build/icon.icns` o
+`build/icon.ico`, el script lo usa; si no, queda el de Electron.
 
 La app empaquetada guarda su sesión en `~/Library/Application Support/crossamp`
-y usa su propio origen `file://`, así que no hereda la sesión de
-`npm run preview`.
+(macOS) o `%APPDATA%\crossamp` (Windows) y usa su propio origen `file://`, así
+que no hereda la sesión de `npm run preview`.
+
+Requiere Node 22+.
 
 ## Fases
 
