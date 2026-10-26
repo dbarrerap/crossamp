@@ -21,6 +21,19 @@ export interface PlaybackHooks {
    * incluido vía loadTrack). void: si no hay siguiente, no hace nada.
    */
   onTrackEnded?: () => Promise<void>;
+  /**
+   * La fuente agendada (gapless) empezó a sonar. El controller ya cambió
+   * currentTrack/metadata; la playlist usa este hook para mover playingId
+   * y preparar la siguiente de la siguiente.
+   */
+  onTrackStarted?: (track: Track) => void;
+}
+
+/** Siguiente pista decodificada y lista para agendar (gapless). */
+interface PreparedTrack {
+  track: Track;
+  tags: ParsedTags;
+  buffer: AudioBuffer;
 }
 
 /**
@@ -42,6 +55,8 @@ export class PlayerController {
   readonly store: Store<PlayerState>;
   private engine: AudioEngine;
   private hooks: PlaybackHooks = {};
+  /** Siguiente pista decodificada, esperando el borde para sonar. */
+  private prepared: PreparedTrack | null = null;
 
   constructor(engine: AudioEngine) {
     this.engine = engine;
@@ -81,6 +96,9 @@ export class PlayerController {
     track: Track,
     options: { autoplay?: boolean } = {}
   ): Promise<void> {
+    // Cargar una pista reemplaza lo que suena: cancelamos la cola gapless.
+    this.clearPrepared();
+
     // Capturamos la URL de la pista anterior, notificamos el cambio (la UI
     // suelta su referencia al instante) y recién AHÍ revocamos: ese orden
     // evita que un img siga apuntando a un blob ya revocado.
@@ -159,6 +177,70 @@ export class PlayerController {
   }
 
   /**
+   * Decodifica una pista SIN tocar la reproducción actual y la deja lista
+   * para agendarse al final del tema en curso (gapless).
+   */
+  async prepareNext(track: Track): Promise<boolean> {
+    if (this.prepared?.track.id === track.id) return true;
+
+    this.prepared = null;
+    try {
+      const bytes = await track.file.arrayBuffer();
+      const tags = parseID3(bytes, track.file.name);
+      const buffer = await this.engine.decode(bytes);
+      this.prepared = { track, tags, buffer };
+      return true;
+    } catch (err) {
+      console.warn('[crossamp] no se pudo preparar la siguiente pista', err);
+      this.prepared = null;
+      return false;
+    }
+  }
+
+  /**
+   * Agenda la pista preparada al final exacto de la actual. Devuelve el
+   * instante de arranque (0 si no hay nada preparado o no está sonando).
+   */
+  enqueuePrepared(): number {
+    if (!this.prepared) return 0;
+
+    const prepared = this.prepared;
+    return this.engine.queue(prepared.buffer, () => {
+      // El motor ya empalmó el audio; acá solo actualizamos el estado, sin
+      // cortar nada. Es el equivalente a loadTrack pero en el borde.
+      this.prepared = null;
+
+      const previousPicture = this.store.get().metadata?.picture ?? null;
+      this.store.set({
+        currentTrack: prepared.track,
+        metadata: this.resolveMetadata(prepared.tags),
+        duration: prepared.buffer.duration,
+        position: 0,
+        isPlaying: true,
+        isLoading: false
+      });
+
+      if (previousPicture?.startsWith('blob:')) {
+        URL.revokeObjectURL(previousPicture);
+      }
+
+      this.hooks.onTrackStarted?.(prepared.track);
+    });
+  }
+
+  /** Descarta la siguiente preparada y cualquier cola agendada. */
+  clearPrepared(): void {
+    this.prepared = null;
+    this.engine.clearQueue();
+  }
+
+  /** Re-agenda lo preparado (al reanudar o después de un seek). */
+  private enqueuePreparedIfPlaying(): void {
+    if (!this.prepared || !this.engine.isPlaying()) return;
+    this.enqueuePrepared();
+  }
+
+  /**
    * Reproduce. Si NO hay pista cargada y hay hook (playlist con items),
    * el hook intenta arrancar desde la lista (req: "Play con lista cargada
    * reproduce desde el primer item"). Si el hook no maneja nada, caemos al
@@ -171,6 +253,8 @@ export class PlayerController {
     }
     this.engine.play();
     this.store.set({ isPlaying: this.engine.isPlaying(), position: this.engine.getTime() });
+    // Al reanudar, la cola se había limpiado en pause(): re-agendamos.
+    this.enqueuePreparedIfPlaying();
   }
 
   pause(): void {
@@ -187,6 +271,8 @@ export class PlayerController {
   seek(seconds: number): void {
     this.engine.seek(seconds);
     this.store.set({ position: this.engine.getTime() });
+    // El seek limpió la cola: la siguiente se re-agenda con el nuevo fin.
+    this.enqueuePreparedIfPlaying();
   }
 
   setVolume(volume: number): void {
@@ -208,6 +294,7 @@ export class PlayerController {
   dispose(): void {
     // El controller es dueño de la object URL de la carátula: al morir,
     // liberarla (si no, el blob queda vivo hasta recargar el documento).
+    this.clearPrepared();
     const picture = this.store.get().metadata?.picture ?? null;
     if (picture?.startsWith('blob:')) URL.revokeObjectURL(picture);
     this.engine.dispose();

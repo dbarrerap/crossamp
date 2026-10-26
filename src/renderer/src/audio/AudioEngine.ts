@@ -11,6 +11,18 @@
 export interface AudioEngine {
   /** Carga una pista y la deja lista para play(). Reemplaza la actual. */
   load(source: File | ArrayBuffer): Promise<void>;
+  /**
+   * Decodifica una pista SIN tocar la reproducción actual. Es la base del
+   * gapless: el siguiente buffer se prepara mientras suena el actual.
+   */
+  decode(source: File | ArrayBuffer): Promise<AudioBuffer>;
+  /**
+   * Agenda `buffer` para empezar exactamente al final de la fuente activa.
+   * Devuelve el instante de AudioContext en que empieza (0 si no se pudo).
+   */
+  queue(buffer: AudioBuffer, onStart?: () => void): number;
+  /** Cancela la fuente agendada (pause, seek, cambio de pista, etc.). */
+  clearQueue(): void;
   play(): void;
   pause(): void;
   /** Salta a una posición en segundos. */

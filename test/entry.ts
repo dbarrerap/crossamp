@@ -31,6 +31,7 @@ import { loadSession, saveSession, type StorageLike } from '../src/renderer/src/
 import { connectSessionPersistence, restoreSession } from '../src/renderer/src/persistence/connect';
 import { connectMediaSession, type MediaSessionLike } from '../src/renderer/src/media/session';
 import { handleMediaAction } from '../src/renderer/src/media/actions';
+import { endTimeOf, startBuffer } from '../src/renderer/src/audio/gapless';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -365,6 +366,9 @@ async function runControllerMetadata(path: string): Promise<void> {
 function createFakeEngine(): AudioEngine {
   return {
     load: async () => {},
+    decode: async () => ({ duration: 100 } as AudioBuffer),
+    queue: () => 0,
+    clearQueue: () => {},
     play: () => {},
     pause: () => {},
     seek: () => {},
@@ -788,6 +792,9 @@ function runMedia(): void {
   let lastSeek = -1;
   const engine: AudioEngine = {
     load: async () => {},
+    decode: async () => ({ duration: 100 } as AudioBuffer),
+    queue: () => 0,
+    clearQueue: () => {},
     play: () => {
       playingFlag = true;
     },
@@ -1193,6 +1200,9 @@ async function runPlaylistTransport(): Promise<void> {
   };
   const loaded: Track[] = [];
   const seeks: number[] = [];
+  const preparedTracks: Track[] = [];
+  let enqueuedPrepared = 0;
+  let clearedPrepared = 0;
   const failIds = new Set<string>();
   const stub = {
     store: new Store<PlayerState>(initialPlayerState),
@@ -1215,6 +1225,17 @@ async function runPlaylistTransport(): Promise<void> {
     },
     seek: (seconds: number): void => {
       seeks.push(seconds);
+    },
+    prepareNext: async (t: Track): Promise<boolean> => {
+      preparedTracks.push(t);
+      return true;
+    },
+    enqueuePrepared: (): number => {
+      enqueuedPrepared++;
+      return 0;
+    },
+    clearPrepared: (): void => {
+      clearedPrepared++;
     }
   };
 
@@ -1485,6 +1506,37 @@ async function runPlaylistTransport(): Promise<void> {
     'drop .m3u: no agrega el archivo como item'
   );
 
+  // Invalidación: cambiar la lista cancela la precarga obsoleta.
+  const gapPl = new PlaylistController();
+  const gapPb = connectPlaylistPlayback({ player: stub, playlist: gapPl });
+  gapPl.addFiles([new File([], 'g1.mp3'), new File([], 'g2.mp3')]);
+  const [g1, g2] = gapPl.store.get().items;
+  await gapPb.playItem(g1.id);
+  await sleep(30);
+  assert(
+    preparedTracks.some((track) => track.id === g2.id),
+    'gapless: precarga la siguiente tras playItem'
+  );
+  const clearsBefore = clearedPrepared;
+  gapPl.select(g2.id);
+  gapPl.removeSelected();
+  await sleep(30);
+  assert(clearedPrepared > clearsBefore, 'gapless: mutación invalida la precarga');
+
+  // El borde mueve playingId mediante el hook.
+  const hookPl = new PlaylistController();
+  const hookPb = connectPlaylistPlayback({ player: stub, playlist: hookPl });
+  hookPl.addFiles([new File([], 'h1.mp3'), new File([], 'h2.mp3')]);
+  const [h1, h2] = hookPl.store.get().items;
+  await hookPb.playItem(h1.id);
+  stubHooks.current!.onTrackStarted?.({
+    id: h2.id,
+    title: 'h2',
+    file: new File([], 'h2.mp3'),
+    path: null
+  });
+  assert(hookPl.store.get().playingId === h2.id, 'gapless: onTrackStarted mueve playingId');
+
   // play() con hook que no maneja → cae al engine sin lanzar.
   const enginePlayer = new PlayerController(new WebAudioEngine());
   let hookCalls = 0;
@@ -1563,6 +1615,188 @@ async function runPlaylistIntegration(paths: string[]): Promise<void> {
 
   player.dispose();
   log('  ===== integración ok =====');
+}
+
+// ===== Fase 4: gapless =====
+
+async function runGaplessOffline(): Promise<void> {
+  log('\n===== gapless: agendado offline =====');
+  const sr = 44100;
+  const ctx = new OfflineAudioContext(1, sr * 2, sr);
+  const first = ctx.createBuffer(1, sr, sr);
+  const second = ctx.createBuffer(1, sr, sr);
+  first.getChannelData(0).fill(0.5);
+  second.getChannelData(0).fill(0.5);
+
+  const startAt = endTimeOf(0, 0, first.duration);
+  assert(Math.abs(startAt - 1) < 1e-9, 'gapless: endTimeOf calcula el fin exacto');
+  startBuffer(ctx, ctx.destination, first, 0);
+  startBuffer(ctx, ctx.destination, second, startAt);
+
+  const rendered = await ctx.startRendering();
+  const data = rendered.getChannelData(0);
+
+  let min = 1;
+  for (let i = sr - 100; i <= sr + 100; i++) min = Math.min(min, data[i]);
+  assert(min > 0.49, 'gapless: 200 muestras continuas en el borde');
+  assert(
+    Math.abs(data[sr - 1] - 0.5) < 1e-3 && Math.abs(data[sr] - 0.5) < 1e-3,
+    'gapless: muestras a ambos lados del borde'
+  );
+}
+
+function createGaplessEngine() {
+  let playing = false;
+  let lastQueue: { buffer: AudioBuffer; onStart?: () => void } | null = null;
+  let clears = 0;
+  const engine: AudioEngine = {
+    load: async () => {
+      playing = false;
+    },
+    decode: async () => ({ duration: 100 } as AudioBuffer),
+    queue: (buffer, onStart) => {
+      lastQueue = { buffer, onStart };
+      return 42;
+    },
+    clearQueue: () => {
+      lastQueue = null;
+      clears++;
+    },
+    play: () => {
+      playing = true;
+    },
+    pause: () => {
+      playing = false;
+      lastQueue = null;
+      clears++;
+    },
+    seek: () => {
+      lastQueue = null;
+      clears++;
+    },
+    getTime: () => 0,
+    getDuration: () => 100,
+    isPlaying: () => playing,
+    setVolume: () => {},
+    onEnded: () => {},
+    dispose: () => {}
+  };
+
+  return {
+    engine,
+    promote: (): void => {
+      lastQueue?.onStart?.();
+    },
+    hasQueue: (): boolean => lastQueue !== null,
+    clears: (): number => clears
+  };
+}
+
+async function runGaplessController(): Promise<void> {
+  log('\n===== gapless: controller =====');
+  const fake = createGaplessEngine();
+  const player = new PlayerController(fake.engine);
+  const started: string[] = [];
+  player.setHooks({ onTrackStarted: (track) => started.push(track.id) });
+
+  const mk = (id: string): Track => ({
+    id,
+    title: id.toUpperCase(),
+    file: new File([id], `${id}.mp3`),
+    path: `/${id}.mp3`
+  });
+
+  await player.loadTrack(mk('a'));
+  assert(player.store.get().currentTrack?.id === 'a', 'gapless: carga A');
+
+  assert((await player.prepareNext(mk('b'))) === true, 'gapless: prepara B');
+  assert(
+    player.store.get().currentTrack?.id === 'a',
+    'gapless: preparar no cambia la pista actual'
+  );
+
+  assert(player.enqueuePrepared() === 42 && fake.hasQueue(), 'gapless: agenda B');
+  fake.promote();
+  assert(player.store.get().currentTrack?.id === 'b', 'gapless: el borde cambia a B');
+  assert(started.join(',') === 'b', 'gapless: hook onTrackStarted');
+  assert(
+    player.store.get().duration === 100 && player.store.get().isPlaying,
+    'gapless: estado de B'
+  );
+  assert(player.enqueuePrepared() === 0, 'gapless: sin preparada, enqueue 0');
+
+  // Pause limpia la cola; play y seek re-agendan lo preparado.
+  await player.prepareNext(mk('c'));
+  assert(player.enqueuePrepared() === 42, 'gapless: agenda C');
+  player.pause();
+  assert(!fake.hasQueue(), 'gapless: pause limpia la cola');
+  await player.play();
+  assert(fake.hasQueue(), 'gapless: play re-agenda lo preparado');
+  player.seek(10);
+  assert(fake.hasQueue(), 'gapless: seek re-agenda lo preparado');
+
+  // loadTrack manual cancela cola y preparada.
+  await player.loadTrack(mk('d'));
+  assert(!fake.hasQueue(), 'gapless: loadTrack cancela la cola');
+  assert(player.enqueuePrepared() === 0, 'gapless: loadTrack descarta la preparada');
+
+  player.dispose();
+}
+
+async function runGaplessEngine(paths: string[]): Promise<void> {
+  log('\n===== gapless: motor real =====');
+  if (paths.length === 0) {
+    log('  (sin MP3s: se omite)');
+    return;
+  }
+
+  const toFile = async (p: string): Promise<File> => {
+    const bytes = await window.crossampTest!.readFile(p);
+    const name = p.split(/[\\/]/).pop() ?? 'pista.mp3';
+    return new File([bytes], name);
+  };
+
+  const engine = new WebAudioEngine();
+  const fileA = await toFile(paths[0]);
+  const fileB = await toFile(paths[1] ?? paths[0]);
+  await engine.load(fileA);
+  engine.play();
+
+  const durationA = engine.getDuration();
+  engine.seek(Math.max(0, durationA - 1.5));
+
+  const bufferB = await engine.decode(fileB);
+  let started = false;
+  const startAt = engine.queue(bufferB, () => {
+    started = true;
+  });
+  assert(startAt > 0, 'gapless motor: agenda un instante de arranque');
+
+  await sleep(2200);
+  assert(started, 'gapless motor: la siguiente arrancó');
+  assert(
+    Math.abs(engine.getDuration() - bufferB.duration) < 0.01,
+    'gapless motor: la pista activa es la siguiente'
+  );
+  assert(engine.isPlaying(), 'gapless motor: sigue sonando');
+  assert(engine.getTime() < 1.5, 'gapless motor: posición reiniciada');
+
+  // Pausa antes del borde: la transición no debe ocurrir.
+  const engine2 = new WebAudioEngine();
+  await engine2.load(fileA);
+  engine2.play();
+  engine2.seek(Math.max(0, engine2.getDuration() - 1.5));
+  const bufferB2 = await engine2.decode(fileB);
+  let started2 = false;
+  engine2.queue(bufferB2, () => {
+    started2 = true;
+  });
+  engine2.pause();
+  await sleep(1800);
+  assert(!started2, 'gapless motor: pause cancela la transición');
+
+  engine.dispose();
+  engine2.dispose();
 }
 
 async function main(): Promise<void> {
@@ -1670,6 +1904,28 @@ async function main(): Promise<void> {
   } catch (err) {
     failures++;
     log(`[FAIL] excepcion en runPlaylistIntegration: ${String(err)}`);
+  }
+
+  // Fase 4: gapless (agendado offline, controller y motor real).
+  try {
+    await runGaplessOffline();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runGaplessOffline: ${String(err)}`);
+  }
+
+  try {
+    await runGaplessController();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runGaplessController: ${String(err)}`);
+  }
+
+  try {
+    await runGaplessEngine(paths);
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runGaplessEngine: ${String(err)}`);
   }
 
   log(`\n########## RESULTADO: ${failures === 0 ? 'TODO OK' : `${failures} FALLOS`} ##########`);

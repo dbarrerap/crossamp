@@ -79,7 +79,17 @@ y usa su propio origen `file://`, así que no hereda la sesión de
 - **Fase 1** — UI player + metadata MP3 + transporte de audio + cableado de estado.
 - **Fase 2** — Seek preciso (VU meter descartado por ahora: es visual, no funcional).
 - **Fase 3** — Apariencia Bento (solo visual): ventana 275×700, grafito + ámbar; tokens en `src/renderer/src/styles/`.
-- **Fase 4** — Gapless playback.
+- **Fase 4** — Gapless playback (implementado): la siguiente pista se decodifica por adelantado y se agenda al final exacto de la actual.
+
+## Gapless
+
+La siguiente pista de la lista se decodifica por adelantado y se agenda en el
+instante exacto en que termina la actual (`AudioBufferSourceNode.start(when)`),
+así que no hay silencio introducido por la app. Pausa, seek y Next descartan y
+re-agendan la cola; si algo falla, se usa el avance normal (con gap).
+
+Matiz: el MP3 lleva delay/padding del encoder; sin trim (LAME/Xing) puede quedar
+un residuo de silencio de decenas de ms en el borde. FLAC/OGG no lo tienen.
 
 ## Licencia
 
