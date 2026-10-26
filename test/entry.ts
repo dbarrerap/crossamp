@@ -32,6 +32,7 @@ import { connectSessionPersistence, restoreSession } from '../src/renderer/src/p
 import { connectMediaSession, type MediaSessionLike } from '../src/renderer/src/media/session';
 import { handleMediaAction } from '../src/renderer/src/media/actions';
 import { endTimeOf, startBuffer } from '../src/renderer/src/audio/gapless';
+import type { TagEdit } from '../src/renderer/src/metadata/types';
 
 // Harness de validacion del backend contra MP3 reales.
 // Corre dentro de Chromium (Electron). Recibe los bytes del MP3 por IPC
@@ -1799,6 +1800,172 @@ async function runGaplessEngine(paths: string[]): Promise<void> {
   engine2.dispose();
 }
 
+/**
+ * Editor de tags (Alt+3): diálogo editable con writeTags falso, modos de
+ * solo lectura (sin ruta / no MP3), error de escritura y actualización de
+ * playlist/player.
+ */
+async function runTagEditor(): Promise<void> {
+  log('\n===== tags: editor =====');
+
+  const writes: Array<{ path: string; tags: TagEdit }> = [];
+  const saved: Array<{ id: string; tags: TagEdit }> = [];
+  let mode: 'ok' | 'fail' = 'ok';
+
+  const pl = new PlaylistController((file) =>
+    file.name === 'sin-ruta.mp3' ? null : `/tmp/${file.name}`
+  );
+  createPlaylistUI(pl, {
+    readFile: async () => new Uint8Array(0),
+    writeTags: async (path, tags) => {
+      writes.push({ path, tags });
+      return mode === 'ok' ? { ok: true } : { ok: false, error: 'boom' };
+    },
+    onTagsSaved: (id, tags) => saved.push({ id, tags })
+  });
+
+  const openInfo = async (): Promise<void> => {
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { code: 'Digit3', altKey: true })
+    );
+    await sleep(30);
+  };
+
+  // --- MP3 con ruta: editable y guarda ---
+  pl.addFiles([new File([], 'uno.mp3')]);
+  const item = pl.store.get().items[0];
+  pl.select(item.id);
+  await openInfo();
+
+  const titleInput = document.querySelector(
+    '[aria-label="Título"]'
+  ) as HTMLInputElement | null;
+  const artistInput = document.querySelector(
+    '[aria-label="Artista"]'
+  ) as HTMLInputElement | null;
+  const albumInput = document.querySelector(
+    '[aria-label="Álbum"]'
+  ) as HTMLInputElement | null;
+  const saveBtn = document.querySelector('.info-save') as HTMLButtonElement | null;
+
+  assert(
+    titleInput !== null && artistInput !== null && albumInput !== null && saveBtn !== null,
+    'tags: campos editables en un MP3 con ruta'
+  );
+  assert(titleInput?.disabled === false, 'tags: inputs habilitados tras leer');
+
+  if (titleInput && artistInput && albumInput) {
+    titleInput.value = 'Nuevo título';
+    artistInput.value = 'Artista';
+    albumInput.value = 'Álbum';
+  }
+  saveBtn?.click();
+  await sleep(30);
+
+  assert(
+    writes.length === 1 && writes[0].path === '/tmp/uno.mp3',
+    'tags: writeTags con la ruta del item'
+  );
+  assert(
+    writes[0]?.tags.title === 'Nuevo título' &&
+      writes[0]?.tags.artist === 'Artista' &&
+      writes[0]?.tags.album === 'Álbum',
+    'tags: payload correcto'
+  );
+  assert(
+    saved.length === 1 && saved[0].id === item.id,
+    'tags: callback con el item'
+  );
+  assert(
+    document.querySelector('.info-note')?.textContent?.includes('Guardado') === true,
+    'tags: confirmación de guardado'
+  );
+  (document.querySelector('.info-close') as HTMLButtonElement).click();
+  assert(document.querySelector('.info-overlay') === null, 'tags: el diálogo cierra');
+
+  // --- Sin ruta: solo lectura ---
+  pl.clear();
+  pl.addFiles([new File([], 'sin-ruta.mp3')]);
+  pl.select(pl.store.get().items[0].id);
+  await openInfo();
+  assert(
+    document.querySelector('.info-input') === null,
+    'tags: sin ruta → solo lectura'
+  );
+  assert(
+    document.querySelector('.info-note')?.textContent?.includes('ruta') === true,
+    'tags: explica que falta la ruta'
+  );
+  (document.querySelector('.info-close') as HTMLButtonElement).click();
+
+  // --- FLAC: solo lectura ---
+  pl.clear();
+  pl.addFiles([new File([], 'x.flac')]);
+  pl.select(pl.store.get().items[0].id);
+  await openInfo();
+  assert(
+    document.querySelector('.info-input') === null,
+    'tags: no MP3 → solo lectura'
+  );
+  assert(
+    document.querySelector('.info-note')?.textContent?.includes('MP3') === true,
+    'tags: avisa que solo edita MP3'
+  );
+  (document.querySelector('.info-close') as HTMLButtonElement).click();
+
+  // --- Error de escritura ---
+  mode = 'fail';
+  pl.clear();
+  pl.addFiles([new File([], 'error.mp3')]);
+  pl.select(pl.store.get().items[0].id);
+  const savedBefore = saved.length;
+  await openInfo();
+  (document.querySelector('.info-save') as HTMLButtonElement).click();
+  await sleep(30);
+  assert(
+    document.querySelector('.info-note')?.textContent?.includes('boom') === true,
+    'tags: muestra el error de escritura'
+  );
+  assert(saved.length === savedBefore, 'tags: no notifica éxito si falló');
+  (document.querySelector('.info-close') as HTMLButtonElement).click();
+  mode = 'ok';
+
+  // --- applyTagEdit ---
+  const withPath = new PlaylistController((file) => `/tmp/${file.name}`);
+  withPath.addFiles([new File([], 'viejo.mp3')]);
+  withPath.applyTagEdit(withPath.store.get().items[0].id, 'nuevo');
+  assert(
+    withPath.store.get().items[0].name === 'nuevo' &&
+      withPath.store.get().items[0].file === null,
+    'tags: applyTagEdit renombra y suelta el File en memoria'
+  );
+
+  const noPath = new PlaylistController();
+  noPath.addFiles([new File([], 'viejo.mp3')]);
+  noPath.applyTagEdit(noPath.store.get().items[0].id, 'otro');
+  assert(
+    noPath.store.get().items[0].name === 'otro' &&
+      noPath.store.get().items[0].file !== null,
+    'tags: sin ruta conserva el File'
+  );
+
+  // --- patchTags ---
+  const player = new PlayerController(createFakeEngine());
+  player.store.set({
+    currentTrack: { id: 't', title: 'T', file: new File([], 't.mp3') },
+    metadata: { title: 'Viejo', artist: null, album: null, picture: null }
+  });
+  player.patchTags({ title: 'Nuevo', artist: 'Art', album: '' });
+  const meta = player.store.get().metadata;
+  assert(
+    meta?.title === 'Nuevo' && meta.artist === 'Art' && meta.album === null,
+    'tags: patchTags actualiza los campos'
+  );
+  player.dispose();
+
+  log('  ===== tags ok =====');
+}
+
 async function main(): Promise<void> {
   if (!window.crossampTest) {
     log('FATAL: API de test no expuesta por el preload');
@@ -1879,6 +2046,15 @@ async function main(): Promise<void> {
   } catch (err) {
     failures++;
     log(`[FAIL] excepcion en runPersistence: ${String(err)}`);
+  }
+
+  // Editor de tags (Alt+3). Va antes del smoke de UI para que no haya dos
+  // listeners de Alt+3 (cada UI de playlist registra el suyo).
+  try {
+    await runTagEditor();
+  } catch (err) {
+    failures++;
+    log(`[FAIL] excepcion en runTagEditor: ${String(err)}`);
   }
 
   // Smoke de UI (Fase 3): estructura de paneles y handlers básicos.

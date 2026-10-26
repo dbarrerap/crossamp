@@ -215,6 +215,26 @@ export class PlaylistController {
     this.store.set({ items, selectedId: null, playingId: null });
   }
 
+  /**
+   * Refleja una edición de tags hecha en disco: actualiza el nombre visible
+   * (si el título no quedó vacío) y suelta el File en memoria para que la
+   * próxima reproducción lea los tags nuevos desde la ruta.
+   */
+  applyTagEdit(id: string, title: string): void {
+    const { items } = this.store.get();
+    const idx = items.findIndex((item) => item.id === id);
+    if (idx < 0) return;
+
+    const item = items[idx];
+    const nextName = title.trim().length > 0 ? title.trim() : item.name;
+    const nextFile = item.path ? null : item.file;
+    if (nextName === item.name && nextFile === item.file) return;
+
+    const next = [...items];
+    next[idx] = { ...item, name: nextName, file: nextFile };
+    this.store.set({ items: next });
+  }
+
   /** Serializa la playlist a texto .m3u (UTF-8). */
   toM3U(): string {
     return serializeM3U(
@@ -255,8 +275,7 @@ export class PlaylistController {
    * Guarda la duración medida (por el engine) en un item. Solo cambia ese
    * item y emite; el orden y todo lo demás quedan intactos.
    */
-  setDuration(id: string, duration: number | null): void {
-    const { items } = this.store.get();
+  setDuration(id: string, duration: number | null): void {    const { items } = this.store.get();
     const idx = items.findIndex((item) => item.id === id);
     if (idx < 0) return;
     const item = items[idx];

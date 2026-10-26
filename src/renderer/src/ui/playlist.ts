@@ -2,6 +2,7 @@ import type { PlaylistController } from '../playlist/PlaylistController';
 import { parseID3 } from '../metadata/mp3';
 import { resolvePlaylistFile, type BytesReader } from '../playlist/materialize';
 import type { PlaylistItem, PlaylistState } from '../playlist/types';
+import type { TagEdit, TagWriteResult } from '../metadata/types';
 
 /**
  * UI de la playlist — funcional, sin pulir (el aspecto Bento es Fase 3).
@@ -26,6 +27,10 @@ export function createPlaylistUI(
     playItem?: (id: string) => void;
     /** Lectura por IPC (Electron), para inspeccionar items de un .m3u. */
     readFile?: BytesReader;
+    /** Escritura de tags (editor Alt+3): solo MP3 en disco. */
+    writeTags?: (path: string, tags: TagEdit) => Promise<TagWriteResult>;
+    /** Aviso tras guardar: el cableado actualiza playlist y player. */
+    onTagsSaved?: (id: string, tags: TagEdit) => void;
   }
 ): HTMLElement {
   const el = document.createElement('div');
@@ -156,7 +161,7 @@ export function createPlaylistUI(
     const { selectedId, items } = store.get();
     const item = selectedId ? (items.find((entry) => entry.id === selectedId) ?? null) : null;
     if (!item) return;
-    void showTrackInfo(item, deps?.readFile);
+    void showTrackInfo(item, deps);
   };
   document.addEventListener('keydown', (e) => {
     if (e.altKey && (e.code === 'Digit3' || e.code === 'Numpad3')) {
@@ -265,14 +270,31 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** Dependencias del diálogo de info/edición (Alt+3). */
+interface TrackInfoDeps {
+  readFile?: BytesReader;
+  writeTags?: (path: string, tags: TagEdit) => Promise<TagWriteResult>;
+  onTagsSaved?: (id: string, tags: TagEdit) => void;
+}
+
 /**
- * Info de la pista (estilo Winamp Alt+3): lee los tags del item SIN
- * reproducirlo. Si el item no tiene bytes en memoria (vino de un .m3u) los
- * lee por IPC — el punto de inflexión de esta feature. Abre un diálogo
- * ligero con lo que el parser encuentre; un tag ausente o corrupto se
- * muestra como "—" sin tumbar el diálogo.
+ * Info de la pista / editor de tags (estilo Winamp File Info, Alt+3).
+ *
+ * Lee los tags SIN reproducir (bytes en memoria o IPC). Si el item es un MP3
+ * con ruta en disco, los campos son editables y se guardan con writeTags;
+ * en el resto de los casos el diálogo es de solo lectura con el motivo.
  */
-async function showTrackInfo(item: PlaylistItem, readFile?: BytesReader): Promise<void> {
+async function showTrackInfo(
+  item: PlaylistItem,
+  deps?: TrackInfoDeps
+): Promise<void> {
+  const path = item.path;
+  const writeTags = deps?.writeTags;
+  const onTagsSaved = deps?.onTagsSaved;
+  const editable = Boolean(
+    path && /\.mp3$/i.test(path) && writeTags && onTagsSaved
+  );
+
   const overlay = document.createElement('div');
   overlay.className = 'info-overlay';
   overlay.setAttribute('role', 'dialog');
@@ -284,42 +306,87 @@ async function showTrackInfo(item: PlaylistItem, readFile?: BytesReader): Promis
 
   const heading = document.createElement('div');
   heading.className = 'info-heading';
-  heading.textContent = 'Info de la pista';
+  heading.textContent = editable ? 'Etiquetas de la pista' : 'Info de la pista';
 
   const rows = document.createElement('div');
   rows.className = 'info-rows';
   const values = new Map<string, HTMLElement>();
-  const setValue = (label: string, text: string): void => {
-    const el = values.get(label);
-    if (!el) return;
-    el.textContent = text;
-    el.title = text;
-  };
-  for (const label of ['Título', 'Artista', 'Álbum', 'Archivo']) {
+  const inputs = new Map<string, HTMLInputElement>();
+  const fields = [
+    { key: 'title', label: 'Título' },
+    { key: 'artist', label: 'Artista' },
+    { key: 'album', label: 'Álbum' }
+  ] as const;
+
+  for (const field of fields) {
     const row = document.createElement('div');
     row.className = 'info-row';
     const key = document.createElement('span');
     key.className = 'info-key';
-    key.textContent = label;
-    const val = document.createElement('span');
-    val.className = 'info-val';
-    val.textContent = '…';
-    row.append(key, val);
+    key.textContent = field.label;
+
+    if (editable) {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'info-input';
+      input.maxLength = 512;
+      input.setAttribute('aria-label', field.label);
+      input.disabled = true; // hasta que termine la lectura
+      row.append(key, input);
+      inputs.set(field.key, input);
+    } else {
+      const val = document.createElement('span');
+      val.className = 'info-val';
+      val.textContent = '…';
+      row.append(key, val);
+      values.set(field.key, val);
+    }
     rows.append(row);
-    values.set(label, val);
   }
-  setValue('Archivo', item.name);
+
+  // Archivo: siempre de solo lectura.
+  const fileRow = document.createElement('div');
+  fileRow.className = 'info-row';
+  const fileKey = document.createElement('span');
+  fileKey.className = 'info-key';
+  fileKey.textContent = 'Archivo';
+  const fileVal = document.createElement('span');
+  fileVal.className = 'info-val';
+  fileVal.textContent = item.name;
+  fileVal.title = path ?? item.name;
+  fileRow.append(fileKey, fileVal);
+  rows.append(fileRow);
 
   const note = document.createElement('div');
   note.className = 'info-note';
   note.hidden = true;
+
+  const setNote = (text: string, isError = false): void => {
+    note.textContent = text;
+    note.classList.toggle('info-error', isError);
+    note.hidden = false;
+  };
+
+  const actions = document.createElement('div');
+  actions.className = 'info-actions';
 
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'info-close';
   closeBtn.textContent = 'Cerrar';
 
-  panel.append(heading, rows, note, closeBtn);
+  const saveBtn = editable ? document.createElement('button') : null;
+  if (saveBtn) {
+    saveBtn.type = 'button';
+    saveBtn.className = 'info-save';
+    saveBtn.textContent = 'Guardar';
+    saveBtn.disabled = true;
+    actions.append(saveBtn, closeBtn);
+  } else {
+    actions.append(closeBtn);
+  }
+
+  panel.append(heading, rows, note, actions);
   overlay.append(panel);
 
   function close(): void {
@@ -330,31 +397,114 @@ async function showTrackInfo(item: PlaylistItem, readFile?: BytesReader): Promis
     if (e.key === 'Escape') close();
   };
 
+  const save = async (): Promise<void> => {
+    if (!saveBtn || !path || !writeTags) return;
+
+    const tags: TagEdit = {
+      title: inputs.get('title')?.value.trim() ?? '',
+      artist: inputs.get('artist')?.value.trim() ?? '',
+      album: inputs.get('album')?.value.trim() ?? ''
+    };
+
+    saveBtn.disabled = true;
+    note.hidden = true;
+    try {
+      const result = await writeTags(path, tags);
+      if (!result.ok) {
+        setNote(
+          `No se pudo guardar: ${result.error ?? 'error desconocido'}`,
+          true
+        );
+        return;
+      }
+
+      onTagsSaved?.(item.id, tags);
+      for (const field of fields) {
+        const input = inputs.get(field.key);
+        if (input) input.value = tags[field.key];
+      }
+      setNote('Guardado.');
+    } catch (err) {
+      setNote(
+        `No se pudo guardar: ${err instanceof Error ? err.message : String(err)}`,
+        true
+      );
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();
   });
   closeBtn.addEventListener('click', close);
+  saveBtn?.addEventListener('click', () => {
+    void save();
+  });
+  panel.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target instanceof HTMLInputElement && editable) {
+      e.preventDefault();
+      void save();
+    }
+  });
   document.addEventListener('keydown', onKey);
   document.body.append(overlay);
   closeBtn.focus();
 
+  if (!editable) {
+    if (!path) {
+      setNote('Edición no disponible: el item no tiene ruta en disco.');
+    } else if (!/\.mp3$/i.test(path)) {
+      setNote('Edición disponible solo para MP3 (ID3).');
+    } else {
+      setNote('Edición no disponible en este entorno.');
+    }
+  }
+
   try {
-    const file = await resolvePlaylistFile(item, readFile);
+    const file = await resolvePlaylistFile(item, deps?.readFile);
     if (!file) throw new Error('no se pudo leer el archivo');
     const tags = parseID3(await file.arrayBuffer(), file.name);
-    setValue('Título', tags.title ?? '—');
-    setValue('Artista', tags.artist ?? '—');
-    setValue('Álbum', tags.album ?? '—');
+
+    if (editable) {
+      for (const field of fields) {
+        const input = inputs.get(field.key);
+        if (input) {
+          input.value = tags[field.key] ?? '';
+          input.disabled = false;
+        }
+      }
+      if (saveBtn) saveBtn.disabled = false;
+      return;
+    }
+
+    for (const field of fields) {
+      const el = values.get(field.key);
+      if (el) {
+        const value = tags[field.key] ?? '—';
+        el.textContent = value;
+        el.title = value;
+      }
+    }
+
     if (!tags.title && !tags.artist && !tags.album) {
-      note.textContent = 'Sin etiquetas ID3: al reproducir se usará el nombre del archivo.';
+      const noTags = 'Sin etiquetas ID3: se usará el nombre del archivo.';
+      note.textContent = note.hidden ? noTags : `${note.textContent} ${noTags}`;
       note.hidden = false;
     }
   } catch (err) {
-    setValue('Título', '—');
-    setValue('Artista', '—');
-    setValue('Álbum', '—');
-    note.textContent = `No se pudo leer: ${err instanceof Error ? err.message : String(err)}`;
-    note.hidden = false;
+    const message = err instanceof Error ? err.message : String(err);
+    if (editable) {
+      setNote(`No se pudo leer el archivo: ${message}`, true);
+    } else {
+      for (const field of fields) {
+        const el = values.get(field.key);
+        if (el) el.textContent = '—';
+      }
+      // En solo lectura, el motivo (sin ruta / no MP3) es más útil que el
+      // error de lectura: solo lo mostramos si no había nota.
+      if (note.hidden) setNote(`No se pudo leer: ${message}`, true);
+    }
   }
 }
 
