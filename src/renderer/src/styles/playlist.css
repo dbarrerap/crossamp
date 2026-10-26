@@ -312,12 +312,69 @@
   margin-bottom: 10px;
 }
 
+.info-note.info-error {
+  color: #e06c6c;
+}
+
 .info-note[hidden] {
   display: none;
 }
 
+/* Editor de etiquetas (Alt+3): inputs y acciones. */
+.info-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font: inherit;
+  color: var(--text);
+  background: #171717;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.info-input:disabled {
+  opacity: 0.6;
+}
+
+.info-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.info-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.info-save {
+  flex: 1;
+  padding: 5px 0;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.info-save:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.info-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.info-save:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+
 .info-close {
-  width: 100%;
+  flex: 1;
   padding: 5px 0;
   background: var(--border);
   color: #fff;

@@ -40,3 +40,16 @@ export interface TrackMetadata {
    */
   picture: string | null;
 }
+
+/** Campos editables por el editor de tags (Alt+3). */
+export interface TagEdit {
+  title: string;
+  artist: string;
+  album: string;
+}
+
+/** Resultado de guardar tags en disco (IPC). */
+export interface TagWriteResult {
+  ok: boolean;
+  error?: string;
+}

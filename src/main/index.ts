@@ -1,6 +1,7 @@
 import { app, BrowserWindow, globalShortcut, ipcMain } from 'electron';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
+import { isTagEdit, writeMp3Tags } from './tagStore';
 
 /**
  * Lee un archivo de audio desde disco y devuelve sus bytes al renderer.
@@ -17,6 +18,28 @@ ipcMain.handle('playlist:readFile', async (_event, path: unknown) => {
     return new Uint8Array(buf);
   } catch {
     return null;
+  }
+});
+
+/**
+ * Guarda los tags editados (Alt+3). Solo MP3: el main valida la ruta y
+ * escribe con backup temporal + rename atómico (ver tagStore.ts).
+ */
+ipcMain.handle('tags:write', async (_event, path: unknown, tags: unknown) => {
+  if (typeof path !== 'string' || path.length === 0) {
+    return { ok: false, error: 'Ruta inválida' };
+  }
+  if (!isTagEdit(tags)) {
+    return { ok: false, error: 'Etiquetas inválidas' };
+  }
+  try {
+    await writeMp3Tags(path, tags);
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err)
+    };
   }
 });
 

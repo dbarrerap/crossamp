@@ -17,7 +17,7 @@ En la app:
 | Atajo | Acción |
 |---|---|
 | Doble clic en un item | Reproduce ese item y sigue con la lista |
-| `Alt+3` | Info de la pista seleccionada (sin reproducirla) |
+| `Alt+3` | Info y edición de etiquetas del item seleccionado (MP3 en disco) |
 | `←` / `→` (con la barra de seek enfocada) | ±5 s |
 | `Shift` + `←` / `→` | ±30 s |
 | `Home` / `End` | Inicio / fin del tema |
@@ -98,6 +98,16 @@ re-agendan la cola; si algo falla, se usa el avance normal (con gap).
 
 Matiz: el MP3 lleva delay/padding del encoder; sin trim (LAME/Xing) puede quedar
 un residuo de silencio de decenas de ms en el borde. FLAC/OGG no lo tienen.
+
+## Etiquetas (Alt+3)
+
+`Alt+3` abre la info del item seleccionado. Si es un **MP3 con ruta en disco**,
+Título/Artista/Álbum son editables y se guardan en el archivo (ID3v2), sin
+renombrar el archivo. FLAC/OGG quedan de solo lectura por ahora.
+
+El guardado es seguro: copia temporal `<archivo>.bak` (si no existía), escribe
+a un temporal, hace rename atómico y elimina el `.bak` al terminar bien. Si
+falla, deja el `.bak` para recuperar.
 
 ## Licencia
 
