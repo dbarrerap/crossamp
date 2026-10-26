@@ -43,6 +43,12 @@ export interface TransportPlayer {
   setHooks(hooks: PlaybackHooks): void;
   loadTrack(track: Track, options?: { autoplay?: boolean }): Promise<void>;
   seek(seconds: number): void;
+  /** Gapless: decodifica la siguiente sin tocar la reproducción actual. */
+  prepareNext(track: Track): Promise<boolean>;
+  /** Gapless: agenda lo preparado al final exacto de la actual. */
+  enqueuePrepared(): number;
+  /** Gapless: descarta lo preparado y la cola agendada. */
+  clearPrepared(): void;
 }
 
 export interface PlaylistPlayback {
@@ -84,6 +90,76 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
   syncCanStart();
 
   /**
+   * Estado de la cadena gapless: qué item está preparado para sonar al
+   * final del actual. `preparingFor` evita preparaciones concurrentes.
+   */
+  let plannedNextId: string | null = null;
+  let preparingFor: string | null = null;
+
+  const expectedNextId = (currentId: string | null): string | null =>
+    currentId === null ? null : (playlist.nextOf(currentId)?.id ?? null);
+
+  /**
+   * Prepara y (si está sonando) agenda la siguiente pista. Salta items
+   * ilegibles igual que el avance normal. Sin siguiente, limpia la cola.
+   */
+  const preloadNext = async (currentId: string | null): Promise<void> => {
+    const expected = expectedNextId(currentId);
+    if (plannedNextId === expected) return;
+    if (preparingFor === currentId) return;
+    if (currentId === null || expected === null) {
+      plannedNextId = null;
+      player.clearPrepared();
+      return;
+    }
+
+    preparingFor = currentId;
+    plannedNextId = null;
+    try {
+      let item = playlist.nextOf(currentId);
+      while (item) {
+        const file = await resolvePlaylistFile(item, readFile);
+        if (file) {
+          const ok = await player.prepareNext({
+            id: item.id,
+            title: item.name,
+            file,
+            path: item.path
+          });
+          if (ok) {
+            plannedNextId = item.id;
+            // Si está pausado, enqueuePrepared devuelve 0: el controller la
+            // re-agenda al reanudar o después de un seek.
+            player.enqueuePrepared();
+            return;
+          }
+        } else {
+          console.warn(
+            `[crossamp] no se pudo precargar "${item.name}" — se omite`
+          );
+        }
+        item = playlist.nextOf(item.id);
+      }
+    } catch (err) {
+      console.warn('[crossamp] error precargando la siguiente pista', err);
+    } finally {
+      if (preparingFor === currentId) preparingFor = null;
+    }
+  };
+
+  // Cambios de lista (quitar, ordenar, randomizar, cargar .m3u): si el
+  // próximo ya no es el que estaba preparado, descartamos y re-planificamos.
+  playlist.store.subscribe(() => {
+    if (plannedNextId === null) return;
+    const current = playlist.store.get().playingId;
+    if (expectedNextId(current) !== plannedNextId) {
+      plannedNextId = null;
+      player.clearPrepared();
+      if (current !== null) void preloadNext(current);
+    }
+  });
+
+  /**
    * Carga un item desde la playlist, opcionalmente en pausa y en una
    * posición. Es la ÚNICA forma de cargar un item: así el player y la
    * playlist quedan asociados por el mismo id y `playingId` marca la pista
@@ -105,6 +181,7 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
     }
 
     playlist.setPlaying(item.id);
+    plannedNextId = null;
     try {
       await player.loadTrack(
         {
@@ -123,6 +200,9 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
       if (options.position !== undefined && options.position > 0) {
         player.seek(options.position);
       }
+
+      // Gapless: decodificamos la siguiente mientras suena esta.
+      void preloadNext(item.id);
       return true;
     } catch (err) {
       console.error(`[crossamp] error reproduciendo "${item.name}"`, err);
@@ -167,6 +247,15 @@ export function connectPlaylistPlayback(deps: ConnectDeps): PlaylistPlayback {
         if (await playItemById(next.id)) return;
         id = next.id; // ilegible → probamos con el que sigue
       }
+    },
+
+    // Gapless: el motor empalmó la siguiente. Movemos la playlist y
+    // preparamos la siguiente de la siguiente.
+    onTrackStarted: (track) => {
+      plannedNextId = null;
+      playlist.setPlaying(track.id);
+      playlist.setDuration(track.id, player.store.get().duration);
+      void preloadNext(track.id);
     }
   });
 

@@ -1,4 +1,5 @@
 import type { AudioEngine } from './AudioEngine';
+import { endTimeOf, startBuffer } from './gapless';
 
 /**
  * Duración del micro-fade al buscar mientras suena. Cortar y re-arrancar la
@@ -37,6 +38,15 @@ export class WebAudioEngine implements AudioEngine {
   private volume = 1;
   private endedCallback: (() => void) | null = null;
 
+  /** Fuente agendada para el final de la actual (gapless). */
+  private queued: {
+    source: AudioBufferSourceNode;
+    buffer: AudioBuffer;
+    startAt: number;
+    onStart?: () => void;
+  } | null = null;
+  private transitionTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor() {
     this.ctx = new AudioContext();
     this.gain = this.ctx.createGain();
@@ -49,24 +59,54 @@ export class WebAudioEngine implements AudioEngine {
   }
 
   async load(source: File | ArrayBuffer): Promise<void> {
-    // decodeAudioData desengancha (detacha) el ArrayBuffer que recibe.
-    // Si nos pasan un File leemos nuestra propia copia; si nos pasan un
-    // ArrayBuffer lo clonamos para no invalidar el del llamante (que
-    // podria necesitarlo p.ej. el parser de metadatos).
-    const bytes =
-      source instanceof File ? await source.arrayBuffer() : source.slice(0);
-
-    // Detenemos la pista actual ANTES de decodificar: cargar un archivo
-    // nuevo sustituye lo que suena ahora, y decodificar puede tardar. Así
-    // el cambio es inmediato y, si la decodificación falla, no queda
-    // audio "huérfano" sonando sin control.
+    // Cargar una pista reemplaza la actual: no dejamos nada agendado.
     this.stopSource();
+    this.clearQueue();
     this.playing = false;
 
-    const buffer = await this.ctx.decodeAudioData(bytes);
-
-    this.buffer = buffer;
+    this.buffer = await this.decode(source);
     this.offset = 0;
+  }
+
+  async decode(source: File | ArrayBuffer): Promise<AudioBuffer> {
+    // decodeAudioData desengancha (detacha) el ArrayBuffer que recibe.
+    // Para no invalidar el del llamante, clonamos si ya es un ArrayBuffer.
+    const bytes =
+      source instanceof File ? await source.arrayBuffer() : source.slice(0);
+    return this.ctx.decodeAudioData(bytes);
+  }
+
+  queue(buffer: AudioBuffer, onStart?: () => void): number {
+    // Solo hay borde si hay una fuente activa sonando.
+    if (!this.buffer || !this.source || !this.playing) return 0;
+
+    this.clearQueue();
+
+    // El final exacto de la fuente actual, según el reloj del contexto.
+    const startAt = endTimeOf(this.startedAt, this.offset, this.buffer.duration);
+    if (startAt <= this.ctx.currentTime) return 0;
+
+    const source = startBuffer(this.ctx, this.gain, buffer, startAt);
+    source.onended = () => this.handleEnded(source);
+
+    this.queued = { source, buffer, startAt, onStart };
+    this.scheduleTransition(startAt);
+    return startAt;
+  }
+
+  clearQueue(): void {
+    this.cancelTransition();
+    const queued = this.queued;
+    this.queued = null;
+    if (!queued) return;
+
+    queued.source.onended = null;
+    try {
+      queued.source.stop();
+    } catch {
+      // Ya había terminado.
+    }
+    queued.source.disconnect();
   }
 
   play(): void {
@@ -86,13 +126,19 @@ export class WebAudioEngine implements AudioEngine {
   pause(): void {
     if (!this.playing) return;
 
+    this.promoteIfDue();
     this.offset = this.getTime();
+    this.clearQueue();
     this.stopSource();
     this.playing = false;
   }
 
   seek(seconds: number): void {
     if (!this.buffer) return;
+
+    // Si el borde ya pasó, la pista activa es la siguiente.
+    this.promoteIfDue();
+    this.clearQueue();
 
     const clamped = Math.max(0, Math.min(seconds, this.buffer.duration));
 
@@ -122,6 +168,11 @@ export class WebAudioEngine implements AudioEngine {
 
   getTime(): number {
     if (!this.buffer) return 0;
+
+    // El rAF de la UI pasa por aquí: si el reloj cruzó el borde, promovemos
+    // la fuente agendada (por si el timer quedó demorado).
+    this.promoteIfDue();
+
     if (!this.playing) return this.offset;
 
     // Math.max(0, …): la fuente del seek arranca unos ms en el futuro, y en
@@ -160,6 +211,7 @@ export class WebAudioEngine implements AudioEngine {
   }
 
   dispose(): void {
+    this.clearQueue();
     this.stopSource();
     this.buffer = null;
     this.endedCallback = null;
@@ -172,17 +224,60 @@ export class WebAudioEngine implements AudioEngine {
     // when: instante absoluto de AudioContext en el que debe sonar. Omitido
     // (play normal) = ahora mismo.
     const startAt = when ?? this.ctx.currentTime;
-    const source = this.ctx.createBufferSource();
-    source.buffer = this.buffer;
-    source.connect(this.gain);
+    const source = startBuffer(this.ctx, this.gain, this.buffer, startAt, offset);
     source.onended = () => this.handleEnded(source);
 
     this.source = source;
     this.startedAt = startAt;
     this.offset = offset;
+  }
 
-    // start(when, offset) arranca `offset` segundos dentro del buffer.
-    source.start(startAt, offset);
+  private scheduleTransition(startAt: number): void {
+    this.cancelTransition();
+    const delayMs = Math.max(0, (startAt - this.ctx.currentTime) * 1000);
+    this.transitionTimer = setTimeout(() => {
+      this.transitionTimer = null;
+      this.promoteQueued(false);
+    }, delayMs);
+  }
+
+  private cancelTransition(): void {
+    if (this.transitionTimer === null) return;
+    clearTimeout(this.transitionTimer);
+    this.transitionTimer = null;
+  }
+
+  /**
+   * Promueve la fuente agendada a activa. `force` lo usan el timer y el
+   * evento ended: el reloj puede estar unos ms antes del borde y el audio
+   * (que sí es exacto) ya está empalmado.
+   */
+  private promoteQueued(force: boolean): void {
+    const queued = this.queued;
+    if (!queued) return;
+    if (!force && this.ctx.currentTime + 0.01 < queued.startAt) return;
+
+    this.queued = null;
+    this.cancelTransition();
+
+    // La fuente anterior termina sola; su onended ya no dispara nada.
+    if (this.source) this.source.onended = null;
+
+    this.source = queued.source;
+    this.buffer = queued.buffer;
+    this.offset = 0;
+    this.startedAt = queued.startAt;
+    this.playing = true;
+
+    queued.onStart?.();
+  }
+
+  /** Consulta perezosa: el rAF de la UI pasa por getTime() cada frame. */
+  private promoteIfDue(): void {
+    if (!this.queued) return;
+    if (this.ctx.currentTime + 0.002 >= this.queued.startAt) {
+      this.promoteQueued(true);
+    }
   }
 
   private stopSource(): void {
@@ -198,6 +293,13 @@ export class WebAudioEngine implements AudioEngine {
   private handleEnded(source: AudioBufferSourceNode): void {
     // Ignoramos fuentes que ya no sean la activa (carrera entre end y seek).
     if (source !== this.source) return;
+
+    // Fin del tema con la siguiente agendada: es el borde, no el fin de la
+    // lista. Promovemos en vez de avisar "terminó".
+    if (this.queued) {
+      this.promoteQueued(true);
+      return;
+    }
 
     this.source = null;
     this.playing = false;
