@@ -20,7 +20,7 @@ on:
 jobs:
   build-and-release:
     runs-on: macos-14
-    timeout-minutes: 80
+    timeout-minutes: 60
     permissions:
       contents: write
       id-token: write
@@ -47,44 +47,35 @@ jobs:
       - name: ✅ Type check
         run: npm run typecheck
 
-      # === 5. Build Electron app ===
+      # === 5. Build Electron app (Vite) ===
       - name: ⚙️ Build Electron app
         run: npm run build
         env:
           VITE_SKIP_PREFLIGHT_CHECK: '1'
 
-      # === 6. Package macOS .app ===
-      - name: 🍎 Package macOS .app
-        run: node scripts/package.mjs darwin arm64
-        env:
-          ELECTRON_MIRROR: 'https://atom.io/download/electron'
-
-      # === 7. Check artifacts ===
-      - name: 📋 Check packaged artifacts
+      # === 6. Verify artifacts exist in dist/ ===
+      - name: 📋 Check existing artifacts
+        id: check_artifacts
         run: |
-          echo "📦 Checking builds..."
-          [ -d dist/crossamp-darwin-arm64/crossamp.app ] && echo "APP_FOUND" || echo "APP_MISSING"
-          [ -f dist/crossamp-win32-x64/crossamp.exe ] && echo "EXE_FOUND" || echo "EXE_MISSING"
-          ls -la dist/crossamp-darwin-arm64/crossamp.app/Contents/MacOS/crossamp 2>/dev/null || echo "⚠️ .app binary not found"
-          ls -la dist/crossamp-win32-x64/crossamp.exe 2>/dev/null || echo "⚠️ .exe not found"
+          echo "📦 Verifying existing builds in dist/..."
+          APP_EXISTS=[ -d dist/crossamp-darwin-arm64/crossamp.app ] && echo "APP_FOUND=true" || echo "APP_FOUND=false"
+          EXE_EXISTS=[ -f dist/crossamp-win32-x64/crossamp.exe ] && echo "EXE_FOUND=true" || echo "EXE_FOUND=false"
+          echo "app_found=$APP_EXISTS" >> $GITHUB_OUTPUT
+          echo "exe_found=$EXE_EXISTS" >> $GITHUB_OUTPUT
 
-      # === 8. Determine release tag ===
+      # === 7. Create GitHub Release ===
       - name: 🏷️ Determine release tag
         id: tag
         run: |
-          # Si el usuario pasó un tag por input, úsalo
           if [ -n "${{ github.event.inputs.tag }}" ]; then
             echo "tag_selected=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
             echo "Using provided tag: ${{ github.event.inputs.tag }}"
           else
-            # Sino, leer version actual de package.json y incrementar patch
             CURRENT_VER=$(node -p "require('./package.json').version")
-            # Quitar v si viene con v
             CLEAN_VER=$(echo "$CURRENT_VER" | sed 's/^v//')
             MAJOR=$(echo "$CLEAN_VER" | cut -d. -f1)
             MINOR=$(echo "$CLEAN_VER" | cut -d. -f2)
             PATCH=$(echo "$CLEAN_VER" | cut -d. -f3)
-            # Incrementar patch
             NEW_PATCH=$((PATCH + 1))
             NEW_VER="${MAJOR}.${MINOR}.${NEW_PATCH}"
             SELECTED_TAG="v${NEW_VER}"
@@ -92,7 +83,6 @@ jobs:
             echo "Auto-incremented version: $CURRENT_VER → $SELECTED_TAG"
           fi
 
-      # === 9. Create GitHub Release ===
       - name: 🏷️ Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -106,7 +96,6 @@ jobs:
 
             ### What's new
             - Auto-generated release from GitHub Actions (0.x series)
-            - Crossplatform builds included
 
             ### Downloads
             - **macOS (.app)**: `%{app_url}`
@@ -117,61 +106,49 @@ jobs:
 
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}
 
-      # === 10. Upload macOS app asset ===
-      - name: 📎 Upload macOS app asset
-        if: steps.create_release.outputs.upload_url != '' && env.app_missing != '1'
+      # === 8. Upload macOS .app asset if it exists ===
+      - name: 📎 Upload macOS app asset (if available)
+        if: steps.check_artifacts.outputs.app_found == 'true'
         run: |
           APP_PATH="dist/crossamp-darwin-arm64/crossamp.app"
-          if [ -d "$APP_PATH" ]; then
-            curl -L \
-              -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.release_id }}/assets?name=crossamp-darwin-arm64.app \
-              --data-binary @"$APP_PATH"
+          echo "📤 Uploading .app from $APP_PATH..."
+          curl -L \
+            -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.release_id }}/assets?name=crossamp-darwin-arm64.app \
+            --data-binary @"$APP_PATH"
             echo "✅ .app uploaded"
-          else
-            echo "⚠️ .app not found after packaging, skipping upload"
-          fi
 
-      # === 11. Handle Windows .exe asset ===
-      - name: 📦 Handle Windows .exe asset
+      # === 9. Upload Windows .exe asset if it exists ===
+      - name: 📎 Upload Windows exe asset (if available)
+        if: steps.check_artifacts.outputs.exe_found == 'true'
         run: |
-          if [ -f dist/crossamp-win32-x64/crossamp.exe ]; then
-            echo "✅ Windows .exe found in dist/, uploading..."
-            EXE_PATH="dist/crossamp-win32-x64/crossamp.exe"
-            curl -L \
-              -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.release_id }}/assets?name=crossamp-win32-x64.exe \
-              --data-binary @"$EXE_PATH"
+          EXE_PATH="dist/crossamp-win32-x64/crossamp.exe"
+          echo "📤 Uploading .exe from $EXE_PATH..."
+          curl -L \
+            -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.release_id }}/assets?name=crossamp-win32-x64.exe \
+            --data-binary @"$EXE_PATH"
             echo "✅ .exe uploaded"
-          else
-            echo "⚠️ Windows .exe not found in dist/"
-            echo "ℹ️ Para incluir .exe en releases: ejecuta localmente:"
-            echo "   node scripts/package.mjs win32 x64"
-            echo "   O sube el archivo manualmente desde dist/crossamp-win32-x64/crossamp.exe"
-            echo "windows_exe_skipped=true" >> $GITHUB_ENV
-          fi
 
-      # === 12. Download links for email ===
+      # === 10. Download links for email ===
       - name: 📧 Download links for email
         run: |
           echo "=== Download links for email ==="
           
-          # macOS link
-          if [ -d dist/crossamp-darwin-arm64/crossamp.app ]; then
+          if [ "${{ steps.check_artifacts.outputs.app_found }}" == "true" ]; then
             echo "macOS: https://github.com/dbarrerap/crossamp/releases/latest/download/crossamp-darwin-arm64.app"
           else
-            echo "macOS: build failed or .app not found"
+            echo "macOS: .app no disponible en dist/ (compila localmente con: node scripts/package.mjs darwin arm64)"
           fi
           
-          # Windows link
-          if [ -f dist/crossamp-win32-x64/crossamp.exe ] && [ "${{ env.windows_exe_skipped }}" != "true" ]; then
+          if [ "${{ steps.check_artifacts.outputs.exe_found }}" == "true" ]; then
             echo "Windows: https://github.com/dbarrerap/crossamp/releases/latest/download/crossamp-win32-x64.exe"
           else
-            echo "Windows: .exe no incluido en este release (compila localmente con: node scripts/package.mjs win32 x64)"
+            echo "Windows: .exe no disponible en dist/ (compila localmente con: node scripts/package.mjs win32 x64)"
           fi
           
           echo "📄 Release URL: https://github.com/dbarrerap/crossamp/releases/tag/${{ steps.tag.outputs.tag_selected }}"
