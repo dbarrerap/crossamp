@@ -57,11 +57,11 @@ jobs:
       - name: 🍎 Package macOS .app
         run: node scripts/package.mjs darwin arm64
         # Nota: Este paso puede fallar en runners de GitHub si el mirror de Electron
-        # no está disponible (error ChecksumParseError). Si falla, el workflow
-        # continuará creando el release sin el .app asset, y el link apuntará a la
-        # página del release donde el usuario verá el estado.
+        # no está disponible (error ChecksumParseError). Se usa continue-on-error: true
+        # para que el workflow continúe creando el release y verificando artifacts.
         # En ejecución local siempre funciona correctamente.
-        # Si el empaquetado falla, se establecerá la variable de entorno para el siguiente step.
+        # Se pasa ELECTRON_MIRROR por si el runner lo necesita.
+        continue-on-error: true
         env:
           # Intentar con mirror por si el runner lo necesita; si falla, el step capturará el error
           ELECTRON_MIRROR: 'https://atom.io/download/electron'
@@ -70,7 +70,8 @@ jobs:
       - name: 📦 Package Windows .exe
         run: node scripts/package.mjs win32 x64
         # Igual que el paso de macOS: puede fallar en runners por mirror, el workflow
-        # manejará esto gracefully.
+        # manejará esto gracefully con continue-on-error.
+        continue-on-error: true
         env:
           ELECTRON_MIRROR: 'https://atom.io/download/electron'
 
