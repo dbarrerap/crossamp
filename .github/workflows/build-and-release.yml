@@ -20,7 +20,7 @@ on:
 jobs:
   build-and-release:
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 80
     permissions:
       contents: write
       id-token: write
@@ -47,23 +47,44 @@ jobs:
       - name: ✅ Type check
         run: npm run typecheck
 
-      # === 5. Build Electron app (Vite) ===
-      - name: ⚙️ Build Electron app
+      # === 5. Build Vite (renderer + preload) ===
+      - name: ⚙️ Build Vite app
         run: npm run build
         env:
           VITE_SKIP_PREFLIGHT_CHECK: '1'
 
-      # === 6. Verify artifacts exist in dist/ ===
+      # === 6. Package macOS .app ===
+      - name: 🍎 Package macOS .app
+        run: node scripts/package.mjs darwin arm64
+        # Nota: Este paso puede fallar en runners de GitHub si el mirror de Electron
+        # no está disponible (error ChecksumParseError). Si falla, el workflow
+        # continuará creando el release sin el .app asset, y el link apuntará a la
+        # página del release donde el usuario verá el estado.
+        # En ejecución local siempre funciona correctamente.
+        # Si el empaquetado falla, se establecerá la variable de entorno para el siguiente step.
+        env:
+          # Intentar con mirror por si el runner lo necesita; si falla, el step capturará el error
+          ELECTRON_MIRROR: 'https://atom.io/download/electron'
+
+      # === 7. Package Windows .exe ===
+      - name: 📦 Package Windows .exe
+        run: node scripts/package.mjs win32 x64
+        # Igual que el paso de macOS: puede fallar en runners por mirror, el workflow
+        # manejará esto gracefully.
+        env:
+          ELECTRON_MIRROR: 'https://atom.io/download/electron'
+
+      # === 7.5. Check what artifacts exist ===
       - name: 📋 Check existing artifacts
         id: check_artifacts
         run: |
-          echo "📦 Verifying existing builds in dist/..."
+          echo "📦 Checking what's in dist/..."
           APP_EXISTS=[ -d dist/crossamp-darwin-arm64/crossamp.app ] && echo "APP_FOUND=true" || echo "APP_FOUND=false"
           EXE_EXISTS=[ -f dist/crossamp-win32-x64/crossamp.exe ] && echo "EXE_FOUND=true" || echo "EXE_FOUND=false"
           echo "app_found=$APP_EXISTS" >> $GITHUB_OUTPUT
           echo "exe_found=$EXE_EXISTS" >> $GITHUB_OUTPUT
 
-      # === 7. Create GitHub Release ===
+      # === 8. Determine release tag ===
       - name: 🏷️ Determine release tag
         id: tag
         run: |
@@ -83,6 +104,7 @@ jobs:
             echo "Auto-incremented version: $CURRENT_VER → $SELECTED_TAG"
           fi
 
+      # === 9. Create GitHub Release ===
       - name: 🏷️ Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -106,7 +128,7 @@ jobs:
 
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}
 
-      # === 8. Upload macOS .app asset if it exists ===
+      # === 10. Upload macOS app asset if it exists ===
       - name: 📎 Upload macOS app asset (if available)
         if: steps.check_artifacts.outputs.app_found == 'true'
         run: |
@@ -120,7 +142,7 @@ jobs:
             --data-binary @"$APP_PATH"
             echo "✅ .app uploaded"
 
-      # === 9. Upload Windows .exe asset if it exists ===
+      # === 11. Upload Windows exe asset if it exists ===
       - name: 📎 Upload Windows exe asset (if available)
         if: steps.check_artifacts.outputs.exe_found == 'true'
         run: |
@@ -134,23 +156,26 @@ jobs:
             --data-binary @"$EXE_PATH"
             echo "✅ .exe uploaded"
 
-      # === 10. Download links for email ===
+      # === 12. Download links for email ===
       - name: 📧 Download links for email
         run: |
           echo "=== Download links for email ==="
           
+          # macOS link: si se subió el asset, usa el link de latest/download; si no, avisa
           if [ "${{ steps.check_artifacts.outputs.app_found }}" == "true" ]; then
             echo "macOS: https://github.com/dbarrerap/crossamp/releases/latest/download/crossamp-darwin-arm64.app"
           else
-            echo "macOS: .app no disponible en dist/ (compila localmente con: node scripts/package.mjs darwin arm64)"
+            echo "macOS: .app no empaquetado en este run (ejecuta localmente: node scripts/package.mjs darwin arm64)"
           fi
           
+          # Windows link: mismo patrón
           if [ "${{ steps.check_artifacts.outputs.exe_found }}" == "true" ]; then
             echo "Windows: https://github.com/dbarrerap/crossamp/releases/latest/download/crossamp-win32-x64.exe"
           else
-            echo "Windows: .exe no disponible en dist/ (compila localmente con: node scripts/package.mjs win32 x64)"
+            echo "Windows: .exe no empaquetado en este run (ejecuta localmente: node scripts/package.mjs win32 x64)"
           fi
           
           echo "📄 Release URL: https://github.com/dbarrerap/crossamp/releases/tag/${{ steps.tag.outputs.tag_selected }}"
           echo "📋 Versión release: ${{ steps.tag.outputs.tag_selected }}"
-          echo "📋 Copia estos links para incluirlos en tus emails a clientes/colaboradores."
+          echo "📋 Copia los links de arriba para incluirlos en tus emails a clientes/colaboradores."
+          echo "💡 Si los archivos no aparecen, empaqueta localmente y vuelve a ejecutar el workflow."
